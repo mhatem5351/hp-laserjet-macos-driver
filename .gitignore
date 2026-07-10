@@ -1,0 +1,14 @@
+# build artifacts
+*.o
+*.zjs
+fwload
+foo2zjs
+
+# spool / logs / personal runtime data — never commit
+P1102-spool/
+*.log
+launchd.out
+launchd.err
+
+# macOS cruft
+.DS_Store

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.p1102.watcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PREFIX__/p1102-watcher.sh</string>
+    </array>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>__HOME__/P1102-spool</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+
+    <!-- Only run when the spool actually changes; avoids the busy respawn loop. -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/P1102-spool/launchd.err</string>
+    <key>StandardOutPath</key>
+    <string>__HOME__/P1102-spool/launchd.out</string>
+</dict>
+</plist>
