@@ -1,8 +1,24 @@
 # p1102-mac-driver
 
-Print to an **HP LaserJet P1102 / P1102w** on modern macOS (Apple Silicon &
-Intel) — including macOS versions where Apple ships no driver and CUPS can no
-longer drive the printer.
+Print to a **host-based HP LaserJet** — the P1000/P1100 "ZjStream" family — on
+modern macOS (Apple Silicon & Intel), including macOS versions where Apple ships
+no driver and CUPS can no longer drive the printer.
+
+Named after the P1102 (the model it was first built and tested on), it now
+auto-detects and drives the whole family:
+
+| Model             | USB PID  | Raster   |
+|-------------------|----------|----------|
+| P1005             | `0x1317` | 600×600  |
+| P1006/P1007/P1008 | `0x1517` | 600×600  |
+| P1505             | `0x0d17` | 600×600  |
+| **P1102 / P1102w** (tested) | `0x002a` | 1200×600 |
+| P1566 / P1606     | `0x092a` | 1200×600 |
+
+The watcher reads the attached printer's USB product id and picks the matching
+firmware blob and raster geometry automatically. Only the P1102 is
+hardware-tested; the others share the same host-based ZjStream path and firmware
+mechanism, so they *should* work — reports welcome (see `CONTRIBUTING.md`).
 
 ## Why this exists
 
@@ -32,14 +48,16 @@ Cmd+P ▸ PDF ▾ ▸ "Print on P1102"
         ▼
   launchd WatchPaths agent  ──►  p1102-watcher.sh   (runs unsandboxed)
         │
-        ├─ fwload  : upload firmware blob over USB (idempotent)
-        ├─ gs      : PDF → 1200×600 monochrome raster (auto A4 / Letter)
+        ├─ detect  : read attached printer's USB product id → model/geometry
+        ├─ fwload  : upload that model's firmware blob over USB (idempotent)
+        ├─ gs      : PDF → monochrome raster (auto A4 / Letter, model geometry)
         ├─ foo2zjs : raster → ZjStream  (-z2 -P -L0)
         └─ fwload  : stream ZjStream to the printer's bulk-OUT endpoint
 ```
 
-The printer is matched by USB **VID 0x03f0 / PID 0x002a**, so no per-machine
-serial number is stored anywhere.
+The printer is matched by USB **VID 0x03f0** plus one of the family product ids
+(see the table above), so no per-machine serial number is stored anywhere. If
+no supported printer is detected, the watcher falls back to P1102 settings.
 
 ## Install
 
@@ -62,9 +80,13 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on P1102"*
 - **First page after power-on** is slow (~20 s) while firmware uploads. Normal.
 - Auto-detects **A4** vs **US Letter** from the PDF. Other sizes fall back to
   Letter — add them to the paper table in `p1102-watcher.sh` if you need them.
+- **Only the P1102 is hardware-tested.** Other models in the table use the same
+  firmware/ZjStream mechanism and *should* work; the `model_row` table in
+  `p1102-watcher.sh` (USB PID → firmware + resolution) is where to fix or add a
+  model if yours misbehaves.
 - **Faint stripes / ghosting** are the toner cartridge (HP **CE285A / 85A**),
   not this software. Shake the cartridge; replace if it persists.
-- Monochrome only (it's a mono laser).
+- Monochrome only (they're mono lasers).
 
 ## Uninstall
 
@@ -76,7 +98,8 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on P1102"*
 
 - [`foo2zjs`](http://foo2zjs.rkkda.com) by Rick Richardson — the ZjStream
   driver and firmware tooling (GNU GPL).
-- Firmware blob is HP's, extracted from the HPLIP plugin at install time.
+- Firmware blobs are HP's, extracted from the HPLIP plugin at install time
+  (one per supported model).
 
 ## License
 

@@ -1,15 +1,29 @@
-// Minimal firmware loader for HP LaserJet P1102 (ZjStream host-based).
-// Opens the printer, finds the bulk-OUT endpoint, and streams the .dl blob.
+// Minimal firmware/data loader for host-based HP LaserJet ZjStream printers
+// (P1005/P1006/P1505/P1102/P1566 family). Opens the printer, finds the
+// bulk-OUT endpoint, and streams the given blob (firmware or ZjStream page).
+//
+// usage: fwload <blob> [VID] [PID]
+//   VID/PID are optional hex (e.g. 0x03f0 0x002a); default to the P1102.
+//   This lets one binary drive any model in the family — the watcher passes
+//   the detected printer's IDs.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <libusb-1.0/libusb.h>
 
-#define VID 0x03f0
-#define PID 0x002a
+#define DEFAULT_VID 0x03f0
+#define DEFAULT_PID 0x002a
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: %s firmware.dl\n", argv[0]); return 2; }
+    if (argc < 2) {
+        fprintf(stderr, "usage: %s blob [VID] [PID]\n", argv[0]);
+        return 2;
+    }
+
+    // Optional VID/PID override (hex or decimal via strtol base 0).
+    int vid = DEFAULT_VID, pid = DEFAULT_PID;
+    if (argc >= 3) vid = (int)strtol(argv[2], NULL, 0);
+    if (argc >= 4) pid = (int)strtol(argv[3], NULL, 0);
 
     FILE *f = fopen(argv[1], "rb");
     if (!f) { perror("open firmware"); return 2; }
@@ -22,8 +36,8 @@ int main(int argc, char **argv) {
     libusb_context *ctx = NULL;
     if (libusb_init(&ctx)) { fprintf(stderr, "libusb_init failed\n"); return 1; }
 
-    libusb_device_handle *h = libusb_open_device_with_vid_pid(ctx, VID, PID);
-    if (!h) { fprintf(stderr, "printer not found (VID %04x PID %04x)\n", VID, PID); return 1; }
+    libusb_device_handle *h = libusb_open_device_with_vid_pid(ctx, vid, pid);
+    if (!h) { fprintf(stderr, "printer not found (VID %04x PID %04x)\n", vid, pid); return 1; }
 
     // macOS: kernel/class driver may hold the interface; detach if possible.
     libusb_set_auto_detach_kernel_driver(h, 1);

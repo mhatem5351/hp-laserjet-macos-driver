@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Multi-model support** for the host-based LaserJet family. The watcher now
+  auto-detects the attached printer by USB product id (`system_profiler`) and
+  selects the matching firmware blob and raster geometry:
+  P1005 (`0x1317`), P1006/P1007/P1008 (`0x1517`), P1505 (`0x0d17`),
+  P1102/P1102w (`0x002a`), P1566/P1606 (`0x092a`). Falls back to P1102 when no
+  supported printer is detected.
+- `fwload` accepts optional `VID PID` arguments (`fwload blob [VID] [PID]`);
+  the watcher passes the detected printer's ids. Defaults remain the P1102.
+- Installer fetches all family firmware blobs from the HPLIP plugin (using any
+  already bundled in `vendor/`), and skips any a given plugin release lacks.
+
+### Changed
+- Only the P1102 is hardware-tested; other models share the same ZjStream path
+  and are expected to work. See the `model_row` table in `p1102-watcher.sh`.
+
 ## [1.0.0]
 
 First public release.
