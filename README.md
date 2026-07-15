@@ -1,31 +1,46 @@
-# p1102-mac-driver
+# hp-laserjet-mac-driver
 
-Print to a **host-based HP LaserJet** — the P1000/P1100 "ZjStream" family — on
-modern macOS (Apple Silicon & Intel), including macOS versions where Apple ships
-no driver and CUPS can no longer drive the printer.
+Print to a **host-based HP LaserJet** on modern macOS (Apple Silicon & Intel),
+including macOS versions where Apple ships no driver and CUPS can no longer
+drive the printer.
 
-Named after the P1102 (the model it was first built and tested on), it now
-auto-detects and drives the whole family:
+These printers speak one of two host-based raster protocols. This driver
+auto-detects the attached model and drives both:
 
-| Model             | USB PID  | Raster   |
-|-------------------|----------|----------|
-| P1005             | `0x1317` | 600×600  |
-| P1006/P1007/P1008 | `0x1517` | 600×600  |
-| P1505             | `0x0d17` | 600×600  |
-| **P1102 / P1102w** (tested) | `0x002a` | 1200×600 |
-| P1566 / P1606     | `0x092a` | 1200×600 |
+| Model                       | USB PID  | Protocol / driver | Raster   |
+|-----------------------------|----------|-------------------|----------|
+| LaserJet 1000               | `0x0517` | ZjStream `foo2zjs`| 600×600  |
+| LaserJet 1005               | `0x1317` | ZjStream `foo2zjs`| 600×600  |
+| LaserJet 1018               | `0x4117` | ZjStream `foo2zjs`| 600×600  |
+| LaserJet 1020               | `0x2b17` | ZjStream `foo2zjs`| 600×600  |
+| **P1102 / P1102w** (tested) | `0x002a` | ZjStream `foo2zjs`| 1200×600 |
+| P1566 / P1606               | `0x092a` | ZjStream `foo2zjs`| 1200×600 |
+| P1005                       | `0x3d17` | XQX `foo2xqx`     | 1200×600 |
+| P1006                       | `0x3e17` | XQX `foo2xqx`     | 1200×600 |
+| P1007 / P1008               | `0x4817` / `0x4917` | XQX `foo2xqx` | 1200×600 |
+| P1505 / P1505n              | `0x3f17` / `0x4017` | XQX `foo2xqx` | 1200×600 |
+| M1005 MFP                   | `0x3b17`¹ | XQX `foo2xqx`    | 1200×600 |
 
-The watcher reads the attached printer's USB product id and picks the matching
-firmware blob and raster geometry automatically. Only the P1102 is
-hardware-tested; the others share the same host-based ZjStream path and firmware
-mechanism, so they *should* work — reports welcome (see `CONTRIBUTING.md`).
+The watcher reads the attached printer's USB product id (or product name) and
+picks the matching **driver**, firmware blob and raster geometry automatically.
+
+> **Only the P1102 is hardware-tested.** Every other row shares the same code
+> path but is unverified on real hardware — reports welcome (see
+> `CONTRIBUTING.md`).
+>
+> ¹ The M1005 MFP's USB product id is not published in the driver's own device
+> table; `0x3b17` is the widely-reported value, and the watcher also matches the
+> M1005 by product name so detection works regardless. Its print engine is
+> P1005-class, so it reuses the P1005 XQX firmware — there is no dedicated M1005
+> blob in the HPLIP plugin. **Untested.**
 
 ## Why this exists
 
-The HP LaserJet P1000/P1100 series is **host-based** (GDI / "ZjStream"): it has
-no PostScript or PCL interpreter and no on-board firmware. Every time it powers
-on it must be fed a firmware blob over USB, and every page must be rasterised on
-the computer. On recent macOS this stopped working because:
+These HP LaserJets are **host-based** (GDI): no PostScript or PCL interpreter
+and no on-board firmware. They come in two raster dialects — ZjStream (LJ
+1000–1020, P1102, P1566) and XQX (P1005–P1505, M1005 MFP). Every time such a
+printer powers on it must be fed a firmware blob over USB, and every page must
+be rasterised on the computer. On recent macOS this stopped working because:
 
 - Apple no longer bundles an HP driver for this model.
 - The printer has **no AirPrint**.
@@ -34,8 +49,9 @@ the computer. On recent macOS this stopped working because:
   can't exec or touch USB (`Operation not permitted`).
 
 So this project skips CUPS entirely. It rasterises with Ghostscript, converts to
-ZjStream with `foo2zjs`, and pushes the bytes straight to the printer over
-`libusb`. A macOS **PDF Service** wires it into the normal Print dialog.
+the printer's protocol with `foo2zjs` (ZjStream) or `foo2xqx` (XQX), and pushes
+the bytes straight to the printer over `libusb`. A macOS **PDF Service** wires
+it into the normal Print dialog.
 
 ## How it works
 
@@ -48,11 +64,12 @@ Cmd+P ▸ PDF ▾ ▸ "Print on P1102"
         ▼
   launchd WatchPaths agent  ──►  p1102-watcher.sh   (runs unsandboxed)
         │
-        ├─ detect  : read attached printer's USB product id → model/geometry
+        ├─ detect  : read attached printer's USB product id/name → model row
         ├─ fwload  : upload that model's firmware blob over USB (idempotent)
         ├─ gs      : PDF → monochrome raster (auto A4 / Letter, model geometry)
-        ├─ foo2zjs : raster → ZjStream  (-z2 -P -L0)
-        └─ fwload  : stream ZjStream to the printer's bulk-OUT endpoint
+        ├─ foo2zjs : raster → ZjStream  (-z2 -P -L0)   [ZjStream models]
+        │  foo2xqx : raster → XQX       (-P -L0)       [XQX models]
+        └─ fwload  : stream the result to the printer's bulk-OUT endpoint
 ```
 
 The printer is matched by USB **VID 0x03f0** plus one of the family product ids
@@ -80,10 +97,10 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on P1102"*
 - **First page after power-on** is slow (~20 s) while firmware uploads. Normal.
 - Auto-detects **A4** vs **US Letter** from the PDF. Other sizes fall back to
   Letter — add them to the paper table in `p1102-watcher.sh` if you need them.
-- **Only the P1102 is hardware-tested.** Other models in the table use the same
-  firmware/ZjStream mechanism and *should* work; the `model_row` table in
-  `p1102-watcher.sh` (USB PID → firmware + resolution) is where to fix or add a
-  model if yours misbehaves.
+- **Only the P1102 is hardware-tested.** Other models use the same mechanism
+  (ZjStream via `foo2zjs`, or XQX via `foo2xqx`) and *should* work; the
+  `model_row` table in `p1102-watcher.sh` (USB PID → driver + firmware +
+  resolution) is where to fix or add a model if yours misbehaves.
 - **Faint stripes / ghosting** are the toner cartridge (HP **CE285A / 85A**),
   not this software. Shake the cartridge; replace if it persists.
 - Monochrome only (they're mono lasers).
@@ -96,10 +113,10 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on P1102"*
 
 ## Credits
 
-- [`foo2zjs`](http://foo2zjs.rkkda.com) by Rick Richardson — the ZjStream
-  driver and firmware tooling (GNU GPL).
+- [`foo2zjs`](http://foo2zjs.rkkda.com) by Rick Richardson — the ZjStream and
+  XQX (`foo2xqx`) drivers and firmware tooling (GNU GPL).
 - Firmware blobs are HP's, extracted from the HPLIP plugin at install time
-  (one per supported model).
+  (one per supported model; the M1005 MFP reuses the P1005 blob).
 
 ## License
 

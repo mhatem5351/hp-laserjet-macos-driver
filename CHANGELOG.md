@@ -8,20 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- **Multi-model support** for the host-based LaserJet family. The watcher now
-  auto-detects the attached printer by USB product id (`system_profiler`) and
-  selects the matching firmware blob and raster geometry:
-  P1005 (`0x1317`), P1006/P1007/P1008 (`0x1517`), P1505 (`0x0d17`),
-  P1102/P1102w (`0x002a`), P1566/P1606 (`0x092a`). Falls back to P1102 when no
-  supported printer is detected.
+- **XQX protocol support (`foo2xqx`)** alongside ZjStream. The host-based
+  LaserJets come in two raster dialects; the driver now handles both. XQX
+  models: P1005 (`0x3d17`), P1006 (`0x3e17`), P1007 (`0x4817`),
+  P1008 (`0x4917`), P1505 (`0x3f17`), P1505n (`0x4017`).
+- **HP LaserJet M1005 MFP** support via `foo2xqx` (`0x3b17`, matched by product
+  name too since its PID is undocumented). Reuses the P1005 XQX firmware — no
+  dedicated M1005 blob exists in the HPLIP plugin. **Untested on hardware.**
+- **Multi-model auto-detection.** The watcher reads the attached printer's USB
+  product id (or product name) and selects the matching driver, firmware blob
+  and raster geometry. Falls back to P1102 when nothing supported is detected.
+- Installer builds `foo2xqx` in addition to `foo2zjs`, and fetches the whole
+  family's firmware blobs from the HPLIP plugin (using any bundled in
+  `vendor/`), skipping any a given plugin release lacks.
 - `fwload` accepts optional `VID PID` arguments (`fwload blob [VID] [PID]`);
   the watcher passes the detected printer's ids. Defaults remain the P1102.
-- Installer fetches all family firmware blobs from the HPLIP plugin (using any
-  already bundled in `vendor/`), and skips any a given plugin release lacks.
+
+### Fixed
+- **Corrected the model/PID table.** An earlier draft listed the P-series with
+  the wrong USB product ids (`0x1317`/`0x1517`/`0x0d17`) and wrongly as
+  ZjStream. Those PIDs are actually the old ZjStream LJ 1005 etc.; the P-series
+  are XQX at `0x3d17`/`0x3e17`/`0x3f17`. ZjStream firmware names were likewise
+  corrected (`sihp1000.dl`…`sihp1020.dl`). Only P1102 (`0x002a`) was right.
 
 ### Changed
-- Only the P1102 is hardware-tested; other models share the same ZjStream path
-  and are expected to work. See the `model_row` table in `p1102-watcher.sh`.
+- Only the P1102 is hardware-tested; every other model (ZjStream or XQX) shares
+  the same code path but is unverified. See the `model_row` table in
+  `p1102-watcher.sh`.
 
 ## [1.0.0]
 
