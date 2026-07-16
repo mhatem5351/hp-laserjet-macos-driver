@@ -77,7 +77,6 @@ find_bin() {
 }
 GS=$(find_bin gs)
 PDFINFO=$(find_bin pdfinfo)
-SPROFILER=/usr/sbin/system_profiler
 
 # Keep the log from growing forever.
 [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 200000 ] && : > "$LOG"
@@ -94,19 +93,20 @@ fi
 # fail, default to the P1102 (keeps behaviour for the original model).
 DRIVER="" ; FW_NAME="" ; RES="" ; XSCALE="" ; PID=""
 
+# We read USB via `ioreg`, not `system_profiler SPUSBDataType`: on macOS Tahoe
+# (26.x) the latter returns nothing at all (empty, no error), which made the
+# watcher mis-detect every printer and fall back to the P1102 default. ioreg
+# reports idProduct/idVendor in decimal, so we reformat to 0xXXXX.
 detect_by_pid() {
-    [ -x "$SPROFILER" ] || return
-    "$SPROFILER" SPUSBDataType 2>/dev/null \
-      | awk 'tolower($0) ~ /product id:/ {print $NF}' \
+    ioreg -p IOUSB -w0 -l 2>/dev/null \
+      | awk '/"idProduct" =/ {printf "0x%04x\n", $NF}' \
       | while read -r p; do
-            pl=$(echo "$p" | tr 'A-F' 'a-f')
-            [ -n "$(model_row "$pl")" ] && { echo "$pl"; break; }
+            [ -n "$(model_row "$p")" ] && { echo "$p"; break; }
         done
 }
 
 detect_by_name() {
-    [ -x "$SPROFILER" ] || return
-    "$SPROFILER" SPUSBDataType 2>/dev/null | tr 'A-Z' 'a-z' \
+    ioreg -p IOUSB -w0 -l 2>/dev/null | tr 'A-Z' 'a-z' \
       | grep -qi 'm1005' && echo "m1005"
 }
 

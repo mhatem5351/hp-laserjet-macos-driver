@@ -95,6 +95,9 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on P1102"*
 ## Notes & limitations
 
 - **First page after power-on** is slow (~20 s) while firmware uploads. Normal.
+- USB detection uses `ioreg` (not `system_profiler`, which returns nothing on
+  macOS Tahoe). `fwload` targets the USB Printer-class interface, so MFPs like
+  the M1005 print from the right interface, not the scanner one.
 - Auto-detects **A4** vs **US Letter** from the PDF. Other sizes fall back to
   Letter — add them to the paper table in `p1102-watcher.sh` if you need them.
 - **Only the P1102 is hardware-tested.** Other models use the same mechanism

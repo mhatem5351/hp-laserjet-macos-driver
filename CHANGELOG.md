@@ -25,6 +25,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the watcher passes the detected printer's ids. Defaults remain the P1102.
 
 ### Fixed
+- **USB detection now uses `ioreg` instead of `system_profiler SPUSBDataType`.**
+  On macOS Tahoe (26.x) `system_profiler SPUSBDataType` returns nothing at all
+  (empty, no error), so the watcher mis-detected every printer — including the
+  P1102 — and silently fell back to the wrong protocol/firmware. `ioreg -p
+  IOUSB` works and reports idProduct/idVendor in decimal (reformatted to hex).
+  Fixes detection in both `p1102-watcher.sh` and `install.sh`.
+  Thanks to the M1005 tester for the diagnosis.
+- **`fwload` selects the USB Printer-class interface, not interface 0.** On
+  multifunction MFPs (M1005, M1120) interface 0 is a vendor-specific (class
+  0xFF) scanner/ACL interface that also exposes bulk endpoints; writing there
+  succeeds silently but never prints. `fwload` now prefers the interface with
+  `bInterfaceClass == 7` (USB Printer), falling back to the first bulk-OUT
+  interface for single-function models like the P1102. Adds a best-effort
+  bulk-IN status read-back so a wrong-interface write is no longer
+  indistinguishable from success.
 - **Corrected the model/PID table.** An earlier draft listed the P-series with
   the wrong USB product ids (`0x1317`/`0x1517`/`0x0d17`) and wrongly as
   ZjStream. Those PIDs are actually the old ZjStream LJ 1005 etc.; the P-series

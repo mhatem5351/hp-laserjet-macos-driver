@@ -1,6 +1,7 @@
-// Minimal firmware/data loader for host-based HP LaserJet ZjStream printers
-// (P1005/P1006/P1505/P1102/P1566 family). Opens the printer, finds the
-// bulk-OUT endpoint, and streams the given blob (firmware or ZjStream page).
+// Minimal firmware/data loader for host-based HP LaserJet printers, both the
+// ZjStream (foo2zjs) and XQX (foo2xqx) families. Opens the printer, selects the
+// USB Printer-class interface (falling back to the first bulk-OUT interface for
+// single-function models), and streams the given blob (firmware or page data).
 //
 // usage: fwload <blob> [VID] [PID]
 //   VID/PID are optional hex (e.g. 0x03f0 0x002a); default to the P1102.
@@ -48,18 +49,39 @@ int main(int argc, char **argv) {
     if (libusb_get_active_config_descriptor(dev, &cfg)) {
         fprintf(stderr, "no config descriptor\n"); return 1;
     }
-    int iface = -1, ep_out = -1;
-    for (int i = 0; i < cfg->bNumInterfaces && ep_out < 0; i++) {
-        const struct libusb_interface_descriptor *id = &cfg->interface[i].altsetting[0];
-        for (int e = 0; e < id->bNumEndpoints; e++) {
-            const struct libusb_endpoint_descriptor *ep = &id->endpoint[e];
-            int is_bulk = (ep->bmAttributes & 3) == LIBUSB_TRANSFER_TYPE_BULK;
-            int is_out  = (ep->bEndpointAddress & 0x80) == 0;
-            if (is_bulk && is_out) { iface = id->bInterfaceNumber; ep_out = ep->bEndpointAddress; break; }
+    // Pick the interface that has a bulk-OUT endpoint. On multifunction MFPs
+    // (M1005, M1120) interface 0 is a vendor-specific (class 0xFF) scanner/ACL
+    // interface that ALSO exposes bulk endpoints — writing there silently
+    // succeeds but never prints. The actual printer is the USB Printer-class
+    // interface (bInterfaceClass == 7). So we scan in two passes: prefer a
+    // class-7 interface, and only fall back to the first bulk-OUT of any class
+    // if the device declares no printer-class interface (e.g. the P1102, which
+    // is single-function and reports interface 0 with no class-7 marker).
+    int iface = -1, ep_out = -1, ep_in = -1, iface_class = -1;
+    for (int pass = 0; pass < 2 && ep_out < 0; pass++) {
+        for (int i = 0; i < cfg->bNumInterfaces && ep_out < 0; i++) {
+            const struct libusb_interface_descriptor *id = &cfg->interface[i].altsetting[0];
+            // pass 0: only the USB Printer class; pass 1: any class.
+            if (pass == 0 && id->bInterfaceClass != LIBUSB_CLASS_PRINTER) continue;
+            int cand_out = -1, cand_in = -1;
+            for (int e = 0; e < id->bNumEndpoints; e++) {
+                const struct libusb_endpoint_descriptor *ep = &id->endpoint[e];
+                int is_bulk = (ep->bmAttributes & 3) == LIBUSB_TRANSFER_TYPE_BULK;
+                int is_out  = (ep->bEndpointAddress & 0x80) == 0;
+                if (!is_bulk) continue;
+                if (is_out && cand_out < 0) cand_out = ep->bEndpointAddress;
+                if (!is_out && cand_in < 0) cand_in = ep->bEndpointAddress;
+            }
+            if (cand_out >= 0) {
+                iface = id->bInterfaceNumber; ep_out = cand_out;
+                ep_in = cand_in; iface_class = id->bInterfaceClass;
+            }
         }
     }
     if (ep_out < 0) { fprintf(stderr, "no bulk-OUT endpoint\n"); return 1; }
-    printf("interface %d, bulk-OUT endpoint 0x%02x\n", iface, ep_out);
+    printf("interface %d (class %d), bulk-OUT 0x%02x", iface, iface_class, ep_out);
+    if (ep_in >= 0) printf(", bulk-IN 0x%02x", ep_in);
+    printf("\n");
 
     int r = libusb_claim_interface(h, iface);
     if (r) { fprintf(stderr, "claim_interface: %s\n", libusb_error_name(r)); return 1; }
@@ -73,6 +95,23 @@ int main(int argc, char **argv) {
         sent += transferred;
     }
     printf("sent %d/%ld bytes\n", sent, len);
+
+    // Best-effort status read-back. A wrong-interface bulk-OUT accepts every
+    // byte and returns success, so a clean "sent N/N" alone cannot confirm the
+    // printer took the data. If the interface exposes a bulk-IN, read from it
+    // with a short timeout: any bytes (or a stall) is a sign the device is
+    // actually reacting. Purely diagnostic — never fails the transfer.
+    if (ep_in >= 0) {
+        unsigned char st[64];
+        int got = 0;
+        int sr = libusb_bulk_transfer(h, ep_in, st, sizeof st, &got, 500);
+        if (sr == 0)
+            printf("status: read %d bytes back\n", got);
+        else if (sr == LIBUSB_ERROR_TIMEOUT)
+            printf("status: no reply within 500ms (printer may still be processing)\n");
+        else
+            printf("status: bulk-IN %s\n", libusb_error_name(sr));
+    }
 
     libusb_release_interface(h, iface);
     libusb_close(h);

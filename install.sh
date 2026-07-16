@@ -35,14 +35,17 @@ die()  { printf '\033[1;31m error:\033[0m %s\n' "$*" >&2; exit 1; }
 # USB product ids of the models we support, for the preflight report.
 # ZjStream: 0517/1317/4117/2b17 (LJ 1000/1005/1018/1020), 002a/092a (P1102/P1566)
 # XQX:      3d17/3e17/4817/4917/3f17/4017 (P1005..P1505n), 3b17 (M1005 MFP)
+#
+# Uses ioreg, not `system_profiler SPUSBDataType`: the latter returns nothing on
+# macOS Tahoe (26.x). ioreg gives idProduct in decimal, so reformat to 0xXXXX.
 detect_model() {
-    local sp=/usr/sbin/system_profiler
-    [ -x "$sp" ] || return
-    "$sp" SPUSBDataType 2>/dev/null | awk '
-        tolower($0) ~ /product id:/ {pid=tolower($NF)}
-        tolower($0) ~ /laserjet/    {name=$0}
-        pid ~ /0x0517|0x1317|0x4117|0x2b17|0x002a|0x092a|0x3d17|0x3e17|0x4817|0x4917|0x3f17|0x4017|0x3b17/ && name {
-            sub(/^ */,"",name); print pid" "name; exit }'
+    ioreg -p IOUSB -w0 -l 2>/dev/null | awk '
+        /"USB Product Name"/ { name=$0; sub(/.*= *"/,"",name); sub(/".*/,"",name) }
+        /"idProduct" =/ {
+            pid=sprintf("0x%04x", $NF)
+            if (pid ~ /0x0517|0x1317|0x4117|0x2b17|0x002a|0x092a|0x3d17|0x3e17|0x4817|0x4917|0x3f17|0x4017|0x3b17/) {
+                print pid" "name; exit }
+        }'
 }
 
 printf '\033[1;36m'
