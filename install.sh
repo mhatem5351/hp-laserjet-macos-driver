@@ -168,9 +168,9 @@ sudo mkdir -p "$PREFIX/firmware"
 sudo cp "$SRC/foo2zjs"          "$PREFIX/foo2zjs"
 sudo cp "$SRC/foo2xqx"          "$PREFIX/foo2xqx"
 sudo cp "$BUILD/fwload"         "$PREFIX/fwload"
-sudo cp "$HERE/p1102-watcher.sh" "$PREFIX/p1102-watcher.sh"
+sudo cp "$HERE/hp-laserjet-watcher.sh" "$PREFIX/hp-laserjet-watcher.sh"
 sudo cp "$FWSTAGE"/*.dl          "$PREFIX/firmware/"
-sudo chmod 755 "$PREFIX/foo2zjs" "$PREFIX/foo2xqx" "$PREFIX/p1102-watcher.sh"
+sudo chmod 755 "$PREFIX/foo2zjs" "$PREFIX/foo2xqx" "$PREFIX/hp-laserjet-watcher.sh"
 sudo chmod 644 "$PREFIX/firmware"/*.dl
 # setuid root: the launchd watcher runs as the user but must claim the USB iface
 sudo chown root:wheel "$PREFIX/fwload"
@@ -178,18 +178,18 @@ sudo chmod 4755 "$PREFIX/fwload"
 
 # --- 5. spool + launchd agent ----------------------------------------------
 step "Creating spool + launchd watcher..."
-mkdir -p "$HOME_DIR/P1102-spool"
+mkdir -p "$HOME_DIR/HP-LaserJet-spool"
 
-AGENT="$HOME_DIR/Library/LaunchAgents/com.p1102.watcher.plist"
+AGENT="$HOME_DIR/Library/LaunchAgents/com.hp-laserjet.watcher.plist"
 mkdir -p "$HOME_DIR/Library/LaunchAgents"
 sed -e "s#__HOME__#$HOME_DIR#g" -e "s#__PREFIX__#$PREFIX#g" \
-    "$HERE/com.p1102.watcher.plist.in" > "$AGENT"
+    "$HERE/com.hp-laserjet.watcher.plist.in" > "$AGENT"
 launchctl unload "$AGENT" 2>/dev/null || true
 launchctl load "$AGENT"
 
 # --- 6. PDF Service (Print-dialog entry) -----------------------------------
-step "Installing 'Print on P1102' PDF Service..."
-PDFSVC="$HOME_DIR/Library/PDF Services/Print on P1102.workflow"
+step "Installing 'Print on HP LaserJet' PDF Service..."
+PDFSVC="$HOME_DIR/Library/PDF Services/Print on HP LaserJet.workflow"
 rm -rf "$PDFSVC"
 mkdir -p "$PDFSVC/Contents"
 cp "$HERE/PDFService/document.wflow" "$PDFSVC/Contents/document.wflow"
@@ -204,7 +204,7 @@ else
 fi
 cat <<EOF
 
-  Print from any app:  Cmd+P  ->  PDF ▾ (bottom-left)  ->  "Print on P1102"
+  Print from any app:  Cmd+P  ->  PDF ▾ (bottom-left)  ->  "Print on HP LaserJet"
 
   Notes:
     • These printers reload firmware on every power-on; the watcher detects

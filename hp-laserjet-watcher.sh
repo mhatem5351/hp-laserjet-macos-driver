@@ -16,7 +16,7 @@ FOO2ZJS="$PREFIX/foo2zjs"
 FOO2XQX="$PREFIX/foo2xqx"
 FWLOAD="$PREFIX/fwload"
 FWDIR="$PREFIX/firmware"
-SPOOL="$HOME/P1102-spool"
+SPOOL="$HOME/HP-LaserJet-spool"
 LOG="$SPOOL/watcher.log"
 
 VID=0x03f0   # HP — same vendor for the whole family
@@ -163,7 +163,7 @@ grid_for() {   # $1 = base-width  $2 = height
 shopt -s nullglob
 for PDF in "$SPOOL"/job-*.pdf; do
     echo "processing $PDF" >> "$LOG"
-    TMP=$(mktemp /tmp/p1102.XXXXXX.raster)
+    TMP=$(mktemp /tmp/hp-laserjet.XXXXXX.raster)
 
     # Firmware is idempotent; push before each job in case of a power cycle.
     "$FWLOAD" "$FW" "$VID" "$PID" >>"$LOG" 2>&1 || true

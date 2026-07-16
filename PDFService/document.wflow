@@ -48,7 +48,7 @@
 					<key>COMMAND_STRING</key>
 					<string># Automator Print Plugin: macOS pipes the path of the generated
 # PDF to stdin, one path per line.
-SPOOL="$HOME/P1102-spool"
+SPOOL="$HOME/HP-LaserJet-spool"
 mkdir -p "$SPOOL"
 DBG="$SPOOL/stub.log"
 echo "=== $(date) workflow invoked ===" &gt;&gt; "$DBG"

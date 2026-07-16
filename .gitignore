@@ -5,7 +5,7 @@ fwload
 foo2zjs
 
 # spool / logs / personal runtime data — never commit
-P1102-spool/
+HP-LaserJet-spool/
 *.log
 launchd.out
 launchd.err

@@ -57,13 +57,13 @@ it into the normal Print dialog.
 ## How it works
 
 ```
-Cmd+P ▸ PDF ▾ ▸ "Print on P1102"
+Cmd+P ▸ PDF ▾ ▸ "Print on HP LaserJet"
         │  (Automator Print Plugin, runs in the print sandbox)
         ▼
-  copies the PDF into ~/P1102-spool/
+  copies the PDF into ~/HP-LaserJet-spool/
         │
         ▼
-  launchd WatchPaths agent  ──►  p1102-watcher.sh   (runs unsandboxed)
+  launchd WatchPaths agent  ──►  hp-laserjet-watcher.sh   (runs unsandboxed)
         │
         ├─ detect  : read attached printer's USB product id/name → model row
         ├─ fwload  : upload that model's firmware blob over USB (idempotent)
@@ -75,13 +75,15 @@ Cmd+P ▸ PDF ▾ ▸ "Print on P1102"
 
 The printer is matched by USB **VID 0x03f0** plus one of the family product ids
 (see the table above), so no per-machine serial number is stored anywhere. If
-no supported printer is detected, the watcher falls back to P1102 settings.
+no supported printer is detected, the watcher leaves the queued jobs in the
+spool and defers — it never guesses a model — so a job queued while the printer
+is off or re-enumerating is not driven with the wrong protocol/firmware.
 
 ## Install
 
 ```bash
-git clone <this-repo> p1102-mac-driver
-cd p1102-mac-driver
+git clone https://gitlab.com/pauyedin/hp-laserjet-mac-driver.git
+cd hp-laserjet-mac-driver
 ./install.sh
 ```
 
@@ -91,7 +93,7 @@ Requirements (the installer checks and installs the Homebrew ones):
 - Xcode Command Line Tools (`xcode-select --install`)
 - `ghostscript`, `libusb`, `poppler` (installed automatically)
 
-Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on P1102"**.
+Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on HP LaserJet"**.
 
 ## Notes & limitations
 
@@ -100,10 +102,10 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on P1102"*
   macOS Tahoe). `fwload` targets the USB Printer-class interface, so MFPs like
   the M1005 print from the right interface, not the scanner one.
 - Auto-detects **A4** vs **US Letter** from the PDF. Other sizes fall back to
-  Letter — add them to the paper table in `p1102-watcher.sh` if you need them.
+  Letter — add them to the paper table in `hp-laserjet-watcher.sh` if you need them.
 - **Hardware-tested: P1102 and M1005 MFP.** Other models use the same mechanism
   (ZjStream via `foo2zjs`, or XQX via `foo2xqx`) and *should* work; the
-  `model_row` table in `p1102-watcher.sh` (USB PID → driver + firmware +
+  `model_row` table in `hp-laserjet-watcher.sh` (USB PID → driver + firmware +
   resolution) is where to fix or add a model if yours misbehaves.
 - **Faint stripes / ghosting** are the toner cartridge (HP **CE285A / 85A**),
   not this software. Shake the cartridge; replace if it persists.

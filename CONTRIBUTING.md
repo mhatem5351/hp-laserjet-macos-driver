@@ -1,4 +1,4 @@
-# Contributing to p1102-mac-driver
+# Contributing to hp-laserjet-mac-driver
 
 Thanks for helping keep old HP LaserJet P1100-series printers alive on modern
 macOS. Contributions of all kinds are welcome: bug reports, fixes, support for
@@ -11,7 +11,7 @@ Open an issue on GitLab with:
 - your macOS version and chip (Apple Silicon / Intel);
 - the exact printer model (P1102, P1102w, or a related P1000/P1100 unit);
 - what you did, what you expected, what happened;
-- the relevant tail of `~/P1102-spool/watcher.log`.
+- the relevant tail of `~/HP-LaserJet-spool/watcher.log`.
 
 **Before pasting logs, scrub anything personal** — your macOS username, home
 path, hostname, and the printer serial number. The project is deliberately
@@ -20,8 +20,8 @@ built to store none of these; please keep it that way in issues too.
 ## Development setup
 
 ```bash
-git clone git@gitlab.com:pauyedin/p1102-mac-driver.git
-cd p1102-mac-driver
+git clone git@gitlab.com:pauyedin/hp-laserjet-mac-driver.git
+cd hp-laserjet-mac-driver
 ./install.sh          # builds foo2zjs + fwload, installs launchd + PDF Service
 ```
 
@@ -33,14 +33,14 @@ The moving parts:
 | File | Role |
 |------|------|
 | `src/fwload.c`         | libusb pusher — firmware + ZjStream to bulk-OUT endpoint |
-| `p1102-watcher.sh`     | the pipeline: `gs` → `foo2zjs` → `fwload` |
+| `hp-laserjet-watcher.sh`     | the pipeline: `gs` → `foo2zjs` → `fwload` |
 | `PDFService/`          | Automator Print Plugin (Print-dialog entry) |
-| `com.p1102.watcher.plist.in` | launchd WatchPaths agent template |
+| `com.hp-laserjet.watcher.plist.in` | launchd WatchPaths agent template |
 | `install.sh` / `uninstall.sh` | setup / teardown |
 
 To test a change to the pipeline without reinstalling, edit the installed copy
-at `/usr/local/share/foo2zjs/p1102-watcher.sh` and drop a PDF into
-`~/P1102-spool/` as `job-<something>.pdf`.
+at `/usr/local/share/foo2zjs/hp-laserjet-watcher.sh` and drop a PDF into
+`~/HP-LaserJet-spool/` as `job-<something>.pdf`.
 
 ## Pull / merge requests
 

@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Print on P1102</string>
+	<string>Print on HP LaserJet</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.p1102.printplugin</string>
+	<string>com.hp-laserjet.printplugin</string>
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleVersion</key>

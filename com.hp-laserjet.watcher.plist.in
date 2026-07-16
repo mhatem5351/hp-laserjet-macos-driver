@@ -3,16 +3,16 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.p1102.watcher</string>
+    <string>com.hp-laserjet.watcher</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>__PREFIX__/p1102-watcher.sh</string>
+        <string>__PREFIX__/hp-laserjet-watcher.sh</string>
     </array>
 
     <key>WatchPaths</key>
     <array>
-        <string>__HOME__/P1102-spool</string>
+        <string>__HOME__/HP-LaserJet-spool</string>
     </array>
 
     <key>EnvironmentVariables</key>
@@ -26,8 +26,8 @@
     <integer>5</integer>
 
     <key>StandardErrorPath</key>
-    <string>__HOME__/P1102-spool/launchd.err</string>
+    <string>__HOME__/HP-LaserJet-spool/launchd.err</string>
     <key>StandardOutPath</key>
-    <string>__HOME__/P1102-spool/launchd.out</string>
+    <string>__HOME__/HP-LaserJet-spool/launchd.out</string>
 </dict>
 </plist>

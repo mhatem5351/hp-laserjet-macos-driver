@@ -1,11 +1,21 @@
 # Changelog
 
-All notable changes to **p1102-mac-driver** are documented here.
+All notable changes to **hp-laserjet-mac-driver** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+### Changed
+- **Renamed the p1102-specific identifiers to generic `hp-laserjet` names**, now
+  that the driver covers the whole host-based family, not only the P1102:
+  `p1102-watcher.sh` → `hp-laserjet-watcher.sh`,
+  `com.p1102.watcher` → `com.hp-laserjet.watcher` (launchd label),
+  the spool dir `~/P1102-spool` → `~/HP-LaserJet-spool`, and the Print-dialog
+  entry "Print on P1102" → "Print on HP LaserJet".
+  **Upgrading breaks an existing install** (the launchd label and spool path
+  change): run the *old* `./uninstall.sh` first, then the new `./install.sh`.
 
 ### Added
 - **XQX protocol support (`foo2xqx`)** alongside ZjStream. The host-based
@@ -40,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (empty, no error), so the watcher mis-detected every printer — including the
   P1102 — and silently fell back to the wrong protocol/firmware. `ioreg -p
   IOUSB` works and reports idProduct/idVendor in decimal (reformatted to hex).
-  Fixes detection in both `p1102-watcher.sh` and `install.sh`.
+  Fixes detection in both `hp-laserjet-watcher.sh` and `install.sh`.
   Thanks to the M1005 tester for the diagnosis.
 - **`fwload` selects the USB Printer-class interface, not interface 0.** On
   multifunction MFPs (M1005, M1120) interface 0 is a vendor-specific (class
@@ -59,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 - Only the P1102 is hardware-tested; every other model (ZjStream or XQX) shares
   the same code path but is unverified. See the `model_row` table in
-  `p1102-watcher.sh`.
+  `hp-laserjet-watcher.sh`.
 
 ## [1.0.0]
 
@@ -91,5 +101,5 @@ First public release.
   software.
 - Page sizes other than A4 / US Letter fall back to Letter.
 
-[Unreleased]: https://gitlab.com/pauyedin/p1102-mac-driver/-/compare/v1.0.0...main
-[1.0.0]: https://gitlab.com/pauyedin/p1102-mac-driver/-/tags/v1.0.0
+[Unreleased]: https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/compare/v1.0.0...main
+[1.0.0]: https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/tags/v1.0.0
