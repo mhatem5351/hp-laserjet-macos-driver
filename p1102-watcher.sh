@@ -119,8 +119,14 @@ else
         ROW=$(name_row "$NAME")
         PID=0x3b17            # best-known M1005 PID for the firmware push
     else
-        PID=0x002a            # default: P1102
-        ROW=$(model_row "$PID")
+        # No supported printer on the bus right now (off, mid power-cycle, or
+        # re-enumerating). Do NOT guess a default model: driving whatever job
+        # is queued as a P1102 would push the wrong protocol/firmware at the
+        # wrong interface on any other model. Leave the jobs in the spool and
+        # bail — launchd re-runs us when the spool changes, and printing again
+        # (or powering the printer on) will re-trigger detection.
+        echo "  no supported printer detected — deferring queued jobs" >> "$LOG"
+        exit 0
     fi
 fi
 

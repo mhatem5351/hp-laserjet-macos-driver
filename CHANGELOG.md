@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the watcher passes the detected printer's ids. Defaults remain the P1102.
 
 ### Fixed
+- **Never guess a default model when no printer is detected.** The watcher used
+  to fall back to the P1102, so a job queued while the printer was off or
+  re-enumerating got driven with the wrong protocol/firmware at the wrong
+  interface, silently. It now logs "no supported printer detected — deferring"
+  and leaves the jobs in the spool for the next print/detection event.
+- **Status read-back drains the full reply.** A single 64-byte bulk-IN read got
+  `LIBUSB_ERROR_OVERFLOW` because the printer answers with more than that.
+  `fwload` now reads whole `wMaxPacketSize` buffers and loops until a short
+  packet, reporting the real byte count ("printer replied") — the actual accept
+  signal that was the point of the read-back.
 - **USB detection now uses `ioreg` instead of `system_profiler SPUSBDataType`.**
   On macOS Tahoe (26.x) `system_profiler SPUSBDataType` returns nothing at all
   (empty, no error), so the watcher mis-detected every printer — including the

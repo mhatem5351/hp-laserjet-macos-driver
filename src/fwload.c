@@ -57,24 +57,28 @@ int main(int argc, char **argv) {
     // class-7 interface, and only fall back to the first bulk-OUT of any class
     // if the device declares no printer-class interface (e.g. the P1102, which
     // is single-function and reports interface 0 with no class-7 marker).
-    int iface = -1, ep_out = -1, ep_in = -1, iface_class = -1;
+    int iface = -1, ep_out = -1, ep_in = -1, iface_class = -1, ep_in_max = 64;
     for (int pass = 0; pass < 2 && ep_out < 0; pass++) {
         for (int i = 0; i < cfg->bNumInterfaces && ep_out < 0; i++) {
             const struct libusb_interface_descriptor *id = &cfg->interface[i].altsetting[0];
             // pass 0: only the USB Printer class; pass 1: any class.
             if (pass == 0 && id->bInterfaceClass != LIBUSB_CLASS_PRINTER) continue;
-            int cand_out = -1, cand_in = -1;
+            int cand_out = -1, cand_in = -1, cand_in_max = 64;
             for (int e = 0; e < id->bNumEndpoints; e++) {
                 const struct libusb_endpoint_descriptor *ep = &id->endpoint[e];
                 int is_bulk = (ep->bmAttributes & 3) == LIBUSB_TRANSFER_TYPE_BULK;
                 int is_out  = (ep->bEndpointAddress & 0x80) == 0;
                 if (!is_bulk) continue;
                 if (is_out && cand_out < 0) cand_out = ep->bEndpointAddress;
-                if (!is_out && cand_in < 0) cand_in = ep->bEndpointAddress;
+                if (!is_out && cand_in < 0) {
+                    cand_in = ep->bEndpointAddress;
+                    if (ep->wMaxPacketSize > 0) cand_in_max = ep->wMaxPacketSize;
+                }
             }
             if (cand_out >= 0) {
                 iface = id->bInterfaceNumber; ep_out = cand_out;
-                ep_in = cand_in; iface_class = id->bInterfaceClass;
+                ep_in = cand_in; ep_in_max = cand_in_max;
+                iface_class = id->bInterfaceClass;
             }
         }
     }
@@ -98,18 +102,30 @@ int main(int argc, char **argv) {
 
     // Best-effort status read-back. A wrong-interface bulk-OUT accepts every
     // byte and returns success, so a clean "sent N/N" alone cannot confirm the
-    // printer took the data. If the interface exposes a bulk-IN, read from it
-    // with a short timeout: any bytes (or a stall) is a sign the device is
-    // actually reacting. Purely diagnostic — never fails the transfer.
+    // printer took the data. If the interface exposes a bulk-IN, drain it: any
+    // bytes back is proof the device is reacting. Read whole wMaxPacketSize
+    // buffers and loop until a short/empty packet ends the reply — a single
+    // 64-byte read got LIBUSB_ERROR_OVERFLOW because the printer answers with
+    // more than that. Purely diagnostic — never fails the transfer.
     if (ep_in >= 0) {
-        unsigned char st[64];
-        int got = 0;
-        int sr = libusb_bulk_transfer(h, ep_in, st, sizeof st, &got, 500);
-        if (sr == 0)
-            printf("status: read %d bytes back\n", got);
+        int bufsz = ep_in_max > 0 ? ep_in_max : 64;
+        unsigned char *st = malloc(bufsz);
+        long total = 0;
+        int sr = 0, reads = 0;
+        while (st && reads < 64) {          // cap reads so we never hang
+            int got = 0;
+            sr = libusb_bulk_transfer(h, ep_in, st, bufsz, &got, 500);
+            if (sr) break;
+            total += got;
+            reads++;
+            if (got < bufsz) break;         // short packet ends the reply
+        }
+        free(st);
+        if (total > 0)
+            printf("status: read %ld bytes back (printer replied)\n", total);
         else if (sr == LIBUSB_ERROR_TIMEOUT)
             printf("status: no reply within 500ms (printer may still be processing)\n");
-        else
+        else if (sr)
             printf("status: bulk-IN %s\n", libusb_error_name(sr));
     }
 

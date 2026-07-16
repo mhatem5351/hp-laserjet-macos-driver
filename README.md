@@ -19,20 +19,21 @@ auto-detects the attached model and drives both:
 | P1006                       | `0x3e17` | XQX `foo2xqx`     | 1200×600 |
 | P1007 / P1008               | `0x4817` / `0x4917` | XQX `foo2xqx` | 1200×600 |
 | P1505 / P1505n              | `0x3f17` / `0x4017` | XQX `foo2xqx` | 1200×600 |
-| M1005 MFP                   | `0x3b17`¹ | XQX `foo2xqx`    | 1200×600 |
+| **M1005 MFP** (tested)      | `0x3b17`¹ | XQX `foo2xqx`    | 1200×600 |
 
 The watcher reads the attached printer's USB product id (or product name) and
 picks the matching **driver**, firmware blob and raster geometry automatically.
 
-> **Only the P1102 is hardware-tested.** Every other row shares the same code
-> path but is unverified on real hardware — reports welcome (see
+> **Hardware-tested: P1102 and M1005 MFP.** The M1005 was verified on macOS
+> Tahoe 26.5.2 (Apple M5, via a USB 2.0 hub). Every other row shares the same
+> code path but is unverified on real hardware — reports welcome (see
 > `CONTRIBUTING.md`).
 >
 > ¹ The M1005 MFP's USB product id is not published in the driver's own device
-> table; `0x3b17` is the widely-reported value, and the watcher also matches the
-> M1005 by product name so detection works regardless. Its print engine is
-> P1005-class, so it reuses the P1005 XQX firmware — there is no dedicated M1005
-> blob in the HPLIP plugin. **Untested.**
+> table; `0x3b17` (confirmed on the tested unit) is used, and the watcher also
+> matches the M1005 by product name so detection works regardless. Its print
+> engine is P1005-class and it reuses the P1005 XQX firmware (`sihpP1005.dl`) —
+> there is no dedicated M1005 blob in the HPLIP plugin, and none is needed.
 
 ## Why this exists
 
@@ -100,7 +101,7 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on P1102"*
   the M1005 print from the right interface, not the scanner one.
 - Auto-detects **A4** vs **US Letter** from the PDF. Other sizes fall back to
   Letter — add them to the paper table in `p1102-watcher.sh` if you need them.
-- **Only the P1102 is hardware-tested.** Other models use the same mechanism
+- **Hardware-tested: P1102 and M1005 MFP.** Other models use the same mechanism
   (ZjStream via `foo2zjs`, or XQX via `foo2xqx`) and *should* work; the
   `model_row` table in `p1102-watcher.sh` (USB PID → driver + firmware +
   resolution) is where to fix or add a model if yours misbehaves.
