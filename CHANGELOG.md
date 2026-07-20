@@ -45,6 +45,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `vendor/`), skipping any a given plugin release lacks.
 - `fwload` accepts optional `VID PID` arguments (`fwload blob [VID] [PID]`);
   the watcher passes the detected printer's ids. Defaults remain the P1102.
+- **Parsed printer status read-back.** `fwload` now accumulates the bulk-IN
+  reply after a transfer and echoes any human-readable ASCII lines as
+  `status-line: `, and any line carrying a recognized PJL token (`CODE=`,
+  `DISPLAY=`, `ONLINE`, `TONER`, `PAGECOUNT`, `PAGES`) as `status-kv: `. Binary
+  or empty replies keep the previous byte-count summary. These lines flow into
+  `~/HP-LaserJet-spool/watcher.log`, so a status poller / menu-bar can parse
+  device state without extra plumbing. Read bounds are unchanged (whole
+  `wMaxPacketSize` buffers, 500ms timeout, capped at 64 reads) and the read-back
+  never affects the exit status.
+- **`fwload --status [VID] [PID]` query mode.** Skips sending any blob: opens the
+  printer, writes a PJL status query (`@PJL INFO STATUS` / `@PJL INFO PAGECOUNT`
+  wrapped in the UEL escape) to bulk-OUT, then reads and prints the reply using
+  the same `status-line: ` / `status-kv: ` parsing. Lets the watcher or a
+  menu-bar poll status without printing a page. The positional
+  `fwload blob [VID] [PID]` mode is unchanged.
 
 ### Fixed
 - **Never guess a default model when no printer is detected.** The watcher used
