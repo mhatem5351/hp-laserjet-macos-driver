@@ -111,6 +111,20 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on HP Lase
   not this software. Shake the cartridge; replace if it persists.
 - Monochrome only (they're mono lasers).
 
+## Compatibility & test reports
+
+Only the P1102 and M1005 MFP are hardware-verified; every other model shares the
+same code path but is unproven. [`TESTED.md`](TESTED.md) tracks the full
+per-model status (✅ verified / ⚠️ untested / ❌ broken) with tester and macOS
+version.
+
+**If you have any of the untested models, a report is the single most useful
+contribution you can make** — working *or* not. Open a *Test Report* issue
+(GitLab issue template) with your model, USB PID, macOS version and a scrubbed
+`watcher.log` tail; to add or fix a `model_row()` entry, use the *Add or Fix
+Model* merge-request template. Both live under `.gitlab/`. See
+`CONTRIBUTING.md`.
+
 ## Uninstall
 
 ```bash
