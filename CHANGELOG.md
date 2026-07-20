@@ -23,6 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   byte-identical to before.
 
 ### Added
+- **Multiple supported printers on the bus at once.** The watcher now
+  enumerates *every* attached supported HP LaserJet (via `ioreg`), not just the
+  first. With exactly one printer, detection and output are byte-for-byte
+  identical to before; with none it still defers without guessing a model. With
+  several, it routes to the printer named by a new `PRINTER` key — a USB PID
+  (e.g. `0x3d17`) or a product-name substring (e.g. `p1005`) — in
+  `~/.config/hp-laserjet/config`, or to a per-job `PRINTER=` in the
+  `job-<ts>.opts` sidecar for a single job. When `PRINTER` is unset it falls
+  back to a deterministic primary (the lowest PID present) and logs which
+  printer it chose and which it ignored. Firmware upload and raster geometry
+  follow the *selected* printer's model row. Documented in `docs/CONFIG.md`
+  ("Selecting a printer when several are connected") and `README.md`.
 - **Optional configuration file.** The watcher now reads
   `~/.config/hp-laserjet/config` (a `KEY=value` shell fragment, overridable via
   `HP_LASERJET_CONFIG`) for defaults such as `PAPER`, `DENSITY` and

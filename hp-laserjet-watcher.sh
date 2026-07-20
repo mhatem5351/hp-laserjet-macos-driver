@@ -33,6 +33,10 @@ VID=0x03f0   # HP — same vendor for the whole family
 #   PAPER=letter|a4|auto     paper size (default auto = detect from the PDF)
 #   DENSITY=<n>              print density; unset = driver default (no flag)
 #   DEFAULT_COPIES=<n>       default copy count for a job (default 1)
+#   PRINTER=<pid|name>       when several supported printers are attached, which
+#                            one to use: a USB PID (e.g. 0x002a) or a substring
+#                            of the product name (e.g. m1005). Ignored when only
+#                            one supported printer is present. Default unset.
 #
 # See docs/CONFIG.md for the full description and the per-job .opts sidecar.
 # ---------------------------------------------------------------------------
@@ -42,6 +46,7 @@ CONFIG_FILE="${HP_LASERJET_CONFIG:-$HOME/.config/hp-laserjet/config}"
 PAPER=auto
 DENSITY=""
 DEFAULT_COPIES=1
+PRINTER=""
 
 load_config() {
     # Keep the no-config path a strict no-op: only source when the file exists.
@@ -145,8 +150,104 @@ detect_by_name() {
       | grep -qi 'm1005' && echo "m1005"
 }
 
-PID=$(detect_by_pid)
-if [ -n "$PID" ]; then
+# --- multi-printer support -------------------------------------------------
+# detect_all_pids() enumerates EVERY connected HP (0x03f0) product id we have a
+# model_row for, in ioreg order, one per line. This is the exact same ioreg+awk
+# scan detect_by_pid() uses (ioreg only — system_profiler is broken on Tahoe),
+# just without the "stop at first" cutoff. Used solely to decide whether more
+# than one supported printer is attached; when only one is, the original
+# single-printer path below runs unchanged.
+detect_all_pids() {
+    ioreg -p IOUSB -w0 -l 2>/dev/null \
+      | awk '/"idProduct" =/ {printf "0x%04x\n", $NF}' \
+      | while read -r p; do
+            [ -n "$(model_row "$p")" ] && echo "$p"
+        done
+}
+
+# select_printer() picks the target PID when SEVERAL supported printers are on
+# the bus. Preference order, all restricted to PIDs actually present ($1..$N):
+#   1. a value matching $WANT (per-job .opts PRINTER=, else config PRINTER=),
+#      matched first as an exact PID, then as a product-name substring;
+#   2. otherwise a deterministic primary: the lexicographically-lowest PID.
+# Echoes the chosen PID. $WANT is read from the caller's $WANT variable.
+# pid_names() emits "0xPID<TAB>lowercased-product-name" pairs, one per USB
+# device node that has both a product id and a product-name string. It walks the
+# same ioreg tree; nodes begin with "+-o", so we reset per node and print when
+# the node closes (or the next node starts). Used to resolve a PRINTER= name
+# substring back to a concrete present PID. ioreg only (Tahoe-safe).
+pid_names() {
+    ioreg -p IOUSB -w0 -l 2>/dev/null | awk '
+        function flush() { if (pid != "" && nm != "") printf "%s\t%s\n", pid, tolower(nm) }
+        /\+-o /                    { flush(); pid=""; nm="" }
+        /"idProduct" =/            { pid = sprintf("0x%04x", $NF) }
+        /"USB Product Name" =/ ||
+        /"kUSBProductString" =/    { n=$0; sub(/^[^=]*= /,"",n); gsub(/"/,"",n); nm=n }
+        END                        { flush() }
+    '
+}
+
+# select_printer() picks the target PID when SEVERAL supported printers are on
+# the bus, restricted to the PIDs actually present ($1..$N):
+#   1. $WANT as an exact PID;
+#   2. $WANT as a product-name substring, mapped back to a present PID;
+#   3. otherwise a deterministic primary: the lexicographically-lowest PID.
+# Echoes the chosen PID. $WANT is read from the caller's $WANT variable.
+select_printer() {   # $@ = list of present supported PIDs
+    local want="$WANT" want_lc p np name
+    if [ -n "$want" ]; then
+        want_lc=$(printf '%s' "$want" | tr 'A-Z' 'a-z')
+        # (a) exact PID match against the present set.
+        for p in "$@"; do
+            [ "$p" = "$want_lc" ] && { echo "$p"; return 0; }
+        done
+        # (b) product-name substring match, mapped back to a present PID.
+        while IFS="$(printf '\t')" read -r np name; do
+            case "$name" in
+                *"$want_lc"*)
+                    for p in "$@"; do
+                        [ "$p" = "$np" ] && { echo "$p"; return 0; }
+                    done ;;
+            esac
+        done <<EOF
+$(pid_names)
+EOF
+        # (c) M1005 fallback: its documented PID may be present even when the
+        #     name line is absent from this node walk.
+        case "$want_lc" in
+            *m1005*)
+                for p in "$@"; do
+                    [ "$p" = "0x3b17" ] && { echo "$p"; return 0; }
+                done ;;
+        esac
+    fi
+    # Deterministic primary: lowest PID present (stable across ioreg ordering).
+    printf '%s\n' "$@" | sort | head -n1
+}
+
+# Enumerate all supported printers to decide single vs multi.
+ALL_PIDS=$(detect_all_pids)
+N_PIDS=$(printf '%s\n' "$ALL_PIDS" | grep -c '^0x')
+
+if [ "$N_PIDS" -gt 1 ]; then
+    # MULTIPLE supported printers attached. Route deliberately instead of
+    # silently taking the first. WANT comes from config PRINTER= (a per-job
+    # .opts PRINTER= can still override inside the job loop). Log the choice
+    # and the ones ignored so behaviour is predictable.
+    WANT="$PRINTER"
+    # shellcheck disable=SC2086
+    PID=$(select_printer $ALL_PIDS)
+    ROW=$(model_row "$PID")
+    IGNORED=$(printf '%s\n' $ALL_PIDS | grep -v "^$PID$" | tr '\n' ' ')
+    echo "  multiple supported printers detected: $(echo $ALL_PIDS | tr '\n' ' ')" >> "$LOG"
+    if [ -n "$PRINTER" ]; then
+        echo "  PRINTER=$PRINTER -> selected $PID (ignoring: ${IGNORED% })" >> "$LOG"
+    else
+        echo "  no PRINTER set; defaulting to lowest PID $PID (ignoring: ${IGNORED% }) — set PRINTER in $CONFIG_FILE to choose" >> "$LOG"
+    fi
+elif [ "$N_PIDS" -eq 1 ]; then
+    # Exactly one supported printer: original single-printer path, unchanged.
+    PID=$(detect_by_pid)
     ROW=$(model_row "$PID")
 else
     NAME=$(detect_by_name)
@@ -165,19 +266,31 @@ else
     fi
 fi
 
-DRIVER=$(echo "$ROW"  | awk '{print $1}')
-FW_NAME=$(echo "$ROW" | awk '{print $2}')
-RES=$(echo "$ROW"     | awk '{print $3}')
-XSCALE=$(echo "$ROW"  | awk '{print $4}')
-FW="$FWDIR/$FW_NAME"
+# apply_row() derives the per-model globals (DRIVER/FW_NAME/RES/XSCALE/FW/CONV)
+# from a model-table row and logs the active printer. Factored out so a per-job
+# PRINTER override can re-point these mid-loop when several printers are
+# attached; the single-printer path calls it exactly once, right here, so its
+# result is identical to the previous inline assignment.
+apply_row() {   # $1 = row string from model_row/name_row
+    DRIVER=$(echo "$1"  | awk '{print $1}')
+    FW_NAME=$(echo "$1" | awk '{print $2}')
+    RES=$(echo "$1"     | awk '{print $3}')
+    XSCALE=$(echo "$1"  | awk '{print $4}')
+    FW="$FWDIR/$FW_NAME"
+    # Pick the raster converter for this printer's protocol.
+    case "$DRIVER" in
+        foo2xqx) CONV="$FOO2XQX" ;;
+        *)       CONV="$FOO2ZJS" ;;
+    esac
+    echo "  printer PID=$PID driver=$DRIVER firmware=$FW_NAME res=$RES xscale=$XSCALE" >> "$LOG"
+}
 
-# Pick the raster converter for this printer's protocol.
-case "$DRIVER" in
-    foo2xqx) CONV="$FOO2XQX" ;;
-    *)       CONV="$FOO2ZJS" ;;
-esac
+apply_row "$ROW"
 
-echo "  printer PID=$PID driver=$DRIVER firmware=$FW_NAME res=$RES xscale=$XSCALE" >> "$LOG"
+# Remember the default selection so per-job PRINTER overrides don't leak from
+# one job to the next (a job with no override always uses the default printer).
+DEFAULT_PID="$PID"
+DEFAULT_ROW="$ROW"
 
 if [ ! -x "$CONV" ]; then
     echo "  ERROR: converter $CONV missing — re-run install.sh" >> "$LOG"
@@ -226,7 +339,16 @@ build_conv_flags() {
 read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     COPIES="$DEFAULT_COPIES"
     JOB_DENSITY="$DENSITY"
-    # Intentionally no sidecar parsing yet — see comment above.
+    JOB_PRINTER=""
+    # Minimal, scoped sidecar parsing: this feature only reads PRINTER= (a PID
+    # or product-name substring) to route this one job when several printers
+    # are attached. Other keys stay unparsed here for downstream features to
+    # fill in. We extract PRINTER= with a line-anchored grep rather than
+    # sourcing, so a malformed sidecar cannot run arbitrary code per job.
+    [ -f "$1" ] || return 0
+    JOB_PRINTER=$(grep -E '^[[:space:]]*PRINTER[[:space:]]*=' "$1" 2>/dev/null \
+                    | tail -n1 | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//' \
+                    | tr -d '"'"'"'')
     return 0
 }
 
@@ -235,8 +357,33 @@ for PDF in "$SPOOL"/job-*.pdf; do
     echo "processing $PDF" >> "$LOG"
     TMP=$(mktemp /tmp/hp-laserjet.XXXXXX.raster)
 
-    # Load any per-job overrides from the sidecar (no-op placeholder for now).
+    # Load any per-job overrides from the sidecar (COPIES/DENSITY unparsed here;
+    # this feature reads only PRINTER=).
     read_job_opts "${PDF%.pdf}.opts"
+
+    # Per-job printer override: only meaningful when several supported printers
+    # are attached. Re-select against the present set using this job's PRINTER=
+    # and, if it resolves to a different printer than the current one, re-derive
+    # the per-model globals for this job. In single-printer mode N_PIDS<=1 so
+    # this whole block is skipped and behaviour is byte-identical to before.
+    if [ "$N_PIDS" -gt 1 ]; then
+        # Start every job from the default selection so an override on one job
+        # never leaks to the next.
+        if [ "$PID" != "$DEFAULT_PID" ]; then
+            PID="$DEFAULT_PID"
+            apply_row "$DEFAULT_ROW"
+        fi
+        if [ -n "$JOB_PRINTER" ]; then
+            WANT="$JOB_PRINTER"
+            # shellcheck disable=SC2086
+            JPID=$(select_printer $ALL_PIDS)
+            if [ -n "$JPID" ] && [ "$JPID" != "$PID" ]; then
+                echo "  job PRINTER=$JOB_PRINTER -> routing this job to $JPID" >> "$LOG"
+                PID="$JPID"
+                apply_row "$(model_row "$PID")"
+            fi
+        fi
+    fi
 
     # Firmware is idempotent; push before each job in case of a power cycle.
     "$FWLOAD" "$FW" "$VID" "$PID" >>"$LOG" 2>&1 || true

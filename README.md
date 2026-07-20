@@ -79,6 +79,19 @@ no supported printer is detected, the watcher leaves the queued jobs in the
 spool and defers — it never guesses a model — so a job queued while the printer
 is off or re-enumerating is not driven with the wrong protocol/firmware.
 
+### Multiple printers
+
+If **several** supported HP LaserJets are attached at once, the watcher detects
+them all and needs to choose a target (the sandboxed Print dialog can't tag a
+job with a destination). Set `PRINTER` in `~/.config/hp-laserjet/config` to a
+USB product id (`PRINTER=0x3d17`) or a product-name substring (`PRINTER=p1005`)
+to pin all jobs to one printer; a `PRINTER=` line in a per-job
+`job-<ts>.opts` sidecar routes a single job. With `PRINTER` unset, the watcher
+falls back to a deterministic primary (the lowest product id present) and logs
+which printer it chose and which it ignored. With only one printer attached this
+is all inert — behaviour is unchanged. See
+[`docs/CONFIG.md`](docs/CONFIG.md#selecting-a-printer-when-several-are-connected).
+
 ## Install
 
 ```bash
@@ -99,9 +112,10 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on HP Lase
 
 The driver works with no configuration. Optionally, an
 `~/.config/hp-laserjet/config` file (`KEY=value`) can set defaults such as
-`PAPER`, `DENSITY` and `DEFAULT_COPIES`, and a per-job `job-<ts>.opts` sidecar
-can carry per-job overrides. See [`docs/CONFIG.md`](docs/CONFIG.md) for the full
-key reference. With neither present, behaviour is unchanged.
+`PAPER`, `DENSITY`, `DEFAULT_COPIES` and `PRINTER` (which printer to use when
+several are attached), and a per-job `job-<ts>.opts` sidecar can carry per-job
+overrides. See [`docs/CONFIG.md`](docs/CONFIG.md) for the full key reference.
+With neither present, behaviour is unchanged.
 
 ## Notes & limitations
 
