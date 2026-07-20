@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   neither is set the converter flags are byte-for-byte identical to before.
   Resolution is intentionally not exposed (it is coupled to the per-model paper
   grid via `XSCALE`; see `docs/CONFIG.md`). Documented in `docs/CONFIG.md`.
+- **macOS completion notifications.** The watcher now posts a Notification
+  Center banner via `osascript` when a job finishes — "Printed on …" on success,
+  a short failure reason on error (empty conversion, nonzero USB push, or missing
+  Ghostscript/converter/firmware), and a single "Printer not detected — job
+  queued" banner when nothing supported is on the bus but a job is waiting. A new
+  `NOTIFY=all|errors|none` config key (default `all`) selects the level.
+  Notifications are best-effort and never affect job processing or exit codes;
+  banner text contains no personal data. Documented in `docs/CONFIG.md`.
 - **Optional configuration file.** The watcher now reads
   `~/.config/hp-laserjet/config` (a `KEY=value` shell fragment, overridable via
   `HP_LASERJET_CONFIG`) for defaults such as `PAPER`, `DENSITY` and

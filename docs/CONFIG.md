@@ -26,6 +26,7 @@ PAPER=auto
 # DENSITY=3
 # ECONOMODE=off
 DEFAULT_COPIES=1
+NOTIFY=all
 EOF
 ```
 
@@ -37,13 +38,38 @@ EOF
 | `DENSITY`        | `1`–`5`, or unset   | unset   | Print density. When unset, no override is added and the driver default is used. See [Print quality / density](#print-quality--density). |
 | `ECONOMODE`      | `on` \| `off`, or unset | unset | Toner-save / draft mode. `off`/unset adds no flag. See [Print quality / density](#print-quality--density). |
 | `DEFAULT_COPIES` | integer ≥ 1         | `1`     | Default number of copies per job when a job does not specify its own. |
+| `NOTIFY`         | `all` \| `errors` \| `none` | `all` | macOS notifications on job completion (see below). |
 
 An unrecognised or empty `PAPER` value falls back to `auto`; an empty
-`DEFAULT_COPIES` falls back to `1`.
+`DEFAULT_COPIES` falls back to `1`; an unrecognised or empty `NOTIFY` falls back
+to `all`.
 
-> **Note:** `PAPER=auto`, `DENSITY` unset, `ECONOMODE` unset and
-> `DEFAULT_COPIES=1` (the defaults) reproduce today's behaviour exactly — the
-> converter flag string is byte-for-byte identical to running with no config.
+> **Note:** `PAPER=auto`, `DENSITY` unset, `ECONOMODE` unset, `DEFAULT_COPIES=1`
+> and `NOTIFY=all` (the defaults) reproduce today's behaviour exactly — the
+> converter flag string is byte-for-byte identical to running with no config,
+> and notifications are informational only.
+
+### `NOTIFY` — completion notifications
+
+The watcher runs from a launchd *user agent*, so it can post a Notification
+Center banner via `osascript`. `NOTIFY` selects what is posted:
+
+| Value    | Posts                                                              |
+|----------|-------------------------------------------------------------------|
+| `all`    | Success (`Printed on <PID> (<driver>)`) **and** failures/defer.   |
+| `errors` | Failures and the "printer not detected" defer only.               |
+| `none`   | Nothing.                                                          |
+
+A failure banner appears when the conversion produces nothing, the USB push
+returns nonzero, or setup is incomplete (missing Ghostscript, converter, or
+firmware). When no supported printer is on the bus **and** a job is waiting, a
+single `Printer not detected — job queued` banner is posted (not repeated on an
+empty spool, to avoid spam when launchd re-fires).
+
+Notifications are best-effort UX only: they never influence whether or how a job
+prints, never change an exit code, and are skipped silently when `osascript` is
+unavailable. Banner text carries only the printer model/driver label and the
+outcome — never your home path, username, or other personal data.
 
 ## Per-job `.opts` sidecar
 

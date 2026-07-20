@@ -120,6 +120,14 @@ per-job `job-<ts>.opts` sidecar can carry per-job overrides of the same keys.
 See [`docs/CONFIG.md`](docs/CONFIG.md) for the full key reference. With neither
 present, behaviour is unchanged.
 
+## Notifications
+
+The watcher posts a macOS notification when a job finishes — "Printed on …" on
+success, a short failure reason otherwise (including when no supported printer is
+on the bus and a job is left queued). Set `NOTIFY` in the config file to
+`all` (default), `errors` (failures only), or `none` to silence them. Notifications
+are best-effort UX and never change whether or how a job prints.
+
 ## Notes & limitations
 
 - **First page after power-on** is slow (~20 s) while firmware uploads. Normal.
