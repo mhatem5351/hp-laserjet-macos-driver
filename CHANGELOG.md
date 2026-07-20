@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   change): run the *old* `./uninstall.sh` first, then the new `./install.sh`.
 
 ### Added
+- **Optional native menu-bar app** (`menubar/`). A standalone single-file
+  Swift/AppKit `NSStatusItem` utility (built with `swiftc`, no Xcode project)
+  that shows printer online/offline status (via `ioreg`, matching the watcher),
+  the queued job count, and actions to retrigger the watcher, open the spool
+  folder, view the log, and clear the spool. Ships with a launchd Agent
+  template (`com.hp-laserjet.menubar.plist.in`) for optional launch-at-login;
+  **not wired into `install.sh`** — see `menubar/README.md`.
 - **XQX protocol support (`foo2xqx`)** alongside ZjStream. The host-based
   LaserJets come in two raster dialects; the driver now handles both. XQX
   models: P1005 (`0x3d17`), P1006 (`0x3e17`), P1007 (`0x4817`),

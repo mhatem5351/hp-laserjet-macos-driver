@@ -111,6 +111,17 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on HP Lase
   not this software. Shake the cartridge; replace if it persists.
 - Monochrome only (they're mono lasers).
 
+## Menu-bar app (optional)
+
+A small native macOS menu-bar (`NSStatusItem`) utility lives in
+[`menubar/`](menubar/). It shows a printer icon with printer online/offline
+status, the queued job count, and one-click actions to retrigger the watcher,
+open the spool folder, view the log, and clear the spool. It is a standalone
+single-file Swift executable (built with `swiftc`, no Xcode project) and never
+touches USB — all printing stays in the watcher. See
+[`menubar/README.md`](menubar/README.md) for build, run and launch-at-login
+instructions.
+
 ## Uninstall
 
 ```bash
