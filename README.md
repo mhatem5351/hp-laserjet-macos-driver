@@ -99,9 +99,11 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on HP Lase
 
 The driver works with no configuration. Optionally, an
 `~/.config/hp-laserjet/config` file (`KEY=value`) can set defaults such as
-`PAPER`, `DENSITY` and `DEFAULT_COPIES`, and a per-job `job-<ts>.opts` sidecar
-can carry per-job overrides. See [`docs/CONFIG.md`](docs/CONFIG.md) for the full
-key reference. With neither present, behaviour is unchanged.
+`PAPER`, `DEFAULT_COPIES`, and print-quality controls `DENSITY` (`1`–`5`, the
+converter `-T` darkness flag) and `ECONOMODE` (`on`/`off`, toner-save `-t`); a
+per-job `job-<ts>.opts` sidecar can carry per-job overrides of the same keys.
+See [`docs/CONFIG.md`](docs/CONFIG.md) for the full key reference. With neither
+present, behaviour is unchanged.
 
 ## Notes & limitations
 
