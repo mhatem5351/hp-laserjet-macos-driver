@@ -155,6 +155,17 @@ contribution you can make** — working *or* not. Open a *Test Report* issue
 Model* merge-request template. Both live under `.gitlab/`. See
 `CONTRIBUTING.md`.
 
+## Menu-bar app (optional)
+
+A small native macOS menu-bar (`NSStatusItem`) utility lives in
+[`menubar/`](menubar/). It shows a printer icon with printer online/offline
+status, the queued job count, and one-click actions to retrigger the watcher,
+open the spool folder, view the log, and clear the spool. It is a standalone
+single-file Swift executable (built with `swiftc`, no Xcode project) and never
+touches USB — all printing stays in the watcher. See
+[`menubar/README.md`](menubar/README.md) for build, run and launch-at-login
+instructions.
+
 ## Uninstall
 
 ```bash

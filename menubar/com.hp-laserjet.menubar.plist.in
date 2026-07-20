@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hp-laserjet.menubar</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PREFIX__/hp-laserjet-menu</string>
+    </array>
+
+    <!-- A menu-bar utility: start at login and keep it running. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/HP-LaserJet-spool/menubar.err</string>
+    <key>StandardOutPath</key>
+    <string>__HOME__/HP-LaserJet-spool/menubar.out</string>
+</dict>
+</plist>
