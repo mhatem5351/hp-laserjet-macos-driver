@@ -31,7 +31,8 @@ VID=0x03f0   # HP — same vendor for the whole family
 # below are used and behaviour is byte-for-byte identical to having no config.
 #
 #   PAPER=letter|a4|auto     paper size (default auto = detect from the PDF)
-#   DENSITY=<n>              print density; unset = driver default (no flag)
+#   DENSITY=<1-5>            print density (foo2* -T); unset = driver default
+#   ECONOMODE=on|off         toner-save/draft (foo2* -t); unset/off = no flag
 #   DEFAULT_COPIES=<n>       default copy count for a job (default 1)
 #
 # See docs/CONFIG.md for the full description and the per-job .opts sidecar.
@@ -41,6 +42,7 @@ CONFIG_FILE="${HP_LASERJET_CONFIG:-$HOME/.config/hp-laserjet/config}"
 # Config-backed settings, with safe defaults. Populated by load_config().
 PAPER=auto
 DENSITY=""
+ECONOMODE=""
 DEFAULT_COPIES=1
 
 load_config() {
@@ -201,11 +203,46 @@ grid_for() {   # $1 = base-width  $2 = height
 # -T5; foo2xqx does not. Kept a function so downstream features (density,
 # duplex, N-up) have one place to extend the flag string.
 build_conv_flags() {
+    local flags
     if [ "$DRIVER" = foo2xqx ]; then
-        echo "-P -L0 -r$RES -g$GDIM -p$PCODE"
+        flags="-P -L0 -r$RES -g$GDIM -p$PCODE"
     else
-        echo "-z2 -P -L0 -r$RES -g$GDIM -p$PCODE -T5"
+        flags="-z2 -P -L0 -r$RES -g$GDIM -p$PCODE -T5"
     fi
+
+    # --- print quality / density (F8) --------------------------------------
+    # Both foo2zjs and foo2xqx accept the same geometry-safe quality flags:
+    #   -T <1-5>   print density  (foo2*.c usage: "-T density  Print density
+    #              (1-5)"; getopt "T:" -> PrintDensity, range-checked 1..5)
+    #   -t         draft/toner-save; on these models the driver maps SaveToner
+    #              to EconoMode=1 (foo2*.c: "case 't': SaveToner = 1").
+    # Neither touches -r/-g, so appending them cannot desync the paper grid.
+    #
+    # Appended (not woven in) so the no-density path stays byte-identical to
+    # the base string above. For foo2zjs the base already carries -T5; a later
+    # -T<n> simply overrides it (getopt keeps the last -T), so an explicit
+    # DENSITY still wins. When JOB_DENSITY is unset/empty nothing is added.
+    if [ -n "$JOB_DENSITY" ]; then
+        case "$JOB_DENSITY" in
+            [1-5])
+                flags="$flags -T$JOB_DENSITY"
+                ;;
+            *)
+                echo "  ignoring DENSITY='$JOB_DENSITY' (want integer 1-5)" >> "$LOG"
+                ;;
+        esac
+    fi
+
+    # Optional toner-save / EconoMode, geometry-safe (-t sets a flag only).
+    if [ -n "$JOB_ECONOMODE" ]; then
+        case "$JOB_ECONOMODE" in
+            1|on|ON|true|yes) flags="$flags -t" ;;
+            0|off|OFF|false|no|"") ;;   # default off: emit nothing
+            *) echo "  ignoring ECONOMODE='$JOB_ECONOMODE' (want on/off)" >> "$LOG" ;;
+        esac
+    fi
+
+    echo "$flags"
 }
 
 # Per-job options (placeholder).
@@ -219,14 +256,34 @@ build_conv_flags() {
 #   NUP=2          N pages per sheet             (future)
 #   DENSITY=3      per-job print-density override(F8)
 #
-# For now this is a no-op that only establishes the structure: it resets the
-# per-job option vars to their config/default values so each iteration starts
-# clean, and does NOT read the sidecar yet. Jobs with no .opts file are wholly
-# unaffected. Downstream features will parse "$1" here and set the vars.
+# Each iteration first resets the per-job option vars to their config/default
+# values so state never leaks between jobs, then — if a sidecar exists — reads
+# a small allow-list of KEY=value lines to override them for this job only.
+# Jobs with no .opts file are wholly unaffected (the reset alone runs).
 read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     COPIES="$DEFAULT_COPIES"
-    JOB_DENSITY="$DENSITY"
-    # Intentionally no sidecar parsing yet — see comment above.
+    JOB_DENSITY="$DENSITY"        # config DENSITY is the per-job default...
+    JOB_ECONOMODE="$ECONOMODE"    # ...and the sidecar may override it below.
+
+    [ -f "$1" ] || return 0
+
+    # Parse only known keys, and only trailing value on each KEY=value line.
+    # We do NOT source the sidecar (avoid arbitrary code / clobbering vars).
+    local line key val
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        key=${line%%=*}
+        val=${line#*=}
+        case "$line" in *=*) ;; *) continue ;; esac   # no '=' -> skip
+        case "$key" in
+            DENSITY)   JOB_DENSITY="$val" ;;
+            ECONOMODE) JOB_ECONOMODE="$val" ;;
+            # COPIES / DUPLEX / NUP are owned by other features (F1); this
+            # function only handles the print-quality keys (F8). Unknown keys
+            # are ignored so features can coexist in one sidecar.
+            *) ;;
+        esac
+    done < "$1"
     return 0
 }
 

@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   byte-identical to before.
 
 ### Added
+- **Print quality / density controls.** `DENSITY` (`1`–`5`) and `ECONOMODE`
+  (`on`/`off`) are now applied to the raster converter — `DENSITY` maps to the
+  `foo2zjs`/`foo2xqx` `-T` darkness flag, `ECONOMODE` to `-t` (toner-save /
+  draft). Both are settable in `~/.config/hp-laserjet/config` and overridable
+  per job in a `job-<ts>.opts` sidecar (which `read_job_opts` now parses).
+  Values are validated and out-of-range ones are logged and ignored. When
+  neither is set the converter flags are byte-for-byte identical to before.
+  Resolution is intentionally not exposed (it is coupled to the per-model paper
+  grid via `XSCALE`; see `docs/CONFIG.md`). Documented in `docs/CONFIG.md`.
 - **Optional configuration file.** The watcher now reads
   `~/.config/hp-laserjet/config` (a `KEY=value` shell fragment, overridable via
   `HP_LASERJET_CONFIG`) for defaults such as `PAPER`, `DENSITY` and
