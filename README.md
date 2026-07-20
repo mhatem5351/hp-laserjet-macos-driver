@@ -95,6 +95,21 @@ Requirements (the installer checks and installs the Homebrew ones):
 
 Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on HP LaserJet"**.
 
+### Install via Homebrew
+
+Prefer `brew`? A Homebrew tap is available. Because the driver installs a
+setuid-root binary, a launchd agent and a PDF Service (which need `sudo` and
+per-user setup that can't run inside `brew install`), it's a two-step install:
+
+```bash
+brew tap pauyedin/hp-laserjet https://gitlab.com/pauyedin/hp-laserjet-mac-driver
+brew install hp-laserjet-mac-driver
+hp-laserjet-install   # runs the bundled install.sh; prompts for your password
+```
+
+See [`HOMEBREW.md`](HOMEBREW.md) for the full walkthrough, uninstall steps, and
+the maintainer release checklist.
+
 ## Configuration
 
 The driver works with no configuration. Optionally, an
