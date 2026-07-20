@@ -10,7 +10,7 @@ setup.
 
 ```bash
 # 1. Add the tap (points Homebrew at this GitLab repo)
-brew tap pauyedin/hp-laserjet https://gitlab.com/pauyedin/hp-laserjet-mac-driver
+brew tap pauyedin/hp-laserjet https://gitlab.com/pauyedin/homebrew-hp-laserjet
 
 # 2. Install the formula (pulls in ghostscript, libusb, poppler)
 brew install hp-laserjet-mac-driver
@@ -55,50 +55,46 @@ brew untap pauyedin/hp-laserjet
 
 ## Maintainer release checklist
 
-When cutting a release, update `Formula/hp-laserjet-mac-driver.rb`:
+The formula lives in a **separate tap repo**,
+[`pauyedin/homebrew-hp-laserjet`](https://gitlab.com/pauyedin/homebrew-hp-laserjet)
+(Homebrew requires a tap repo named `homebrew-<tap>`). A copy is kept in this
+repo under `Formula/` for reference/CI; the copy `brew` actually uses is the one
+in the tap repo. On each release, update **both** (or update the tap and copy it
+here).
 
-1. **Tag the release** and push the tag:
-
-   ```bash
-   git tag v1.0.0
-   git push origin v1.0.0
-   ```
-
-2. **Update `url` and `version`** in the formula to match the tag. GitLab serves
-   a source tarball for any tag at:
-
-   ```
-   https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v1.0.0/hp-laserjet-mac-driver-v1.0.0.tar.gz
-   ```
-
-3. **Compute the tarball `sha256`** and replace the `REPLACE_ME` placeholder in
-   the formula. Either let Homebrew fetch it:
+1. **Tag the release** in this project repo and push the tag:
 
    ```bash
-   brew fetch --build-from-source ./Formula/hp-laserjet-mac-driver.rb
-   # prints the SHA-256 of the downloaded tarball
+   git tag v0.1
+   git push origin v0.1
    ```
 
-   or download and hash it directly:
+2. **Update `url`** in the formula to point at that tag's source tarball. GitLab
+   serves a source tarball for any tag at:
+
+   ```
+   https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v0.1/hp-laserjet-mac-driver-v0.1.tar.gz
+   ```
+
+   (No explicit `version` line is needed — `brew` scans it from the URL.)
+
+3. **Compute the tarball `sha256`** and set it in the formula:
 
    ```bash
    curl -fsSL -o /tmp/hpljd.tar.gz \
-     "https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v1.0.0/hp-laserjet-mac-driver-v1.0.0.tar.gz"
+     "https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v0.1/hp-laserjet-mac-driver-v0.1.tar.gz"
    shasum -a 256 /tmp/hpljd.tar.gz
    ```
 
-   > **Do not commit the formula with `sha256 "REPLACE_ME"`** — `brew install`
-   > refuses a checksum mismatch, so the placeholder must be replaced before the
-   > release is usable.
-
-4. **Syntax-check** the formula and audit it:
+4. **Syntax-check, audit, install and test** against the tap:
 
    ```bash
    ruby -c Formula/hp-laserjet-mac-driver.rb
-   brew audit --strict --formula ./Formula/hp-laserjet-mac-driver.rb
-   brew install --build-from-source ./Formula/hp-laserjet-mac-driver.rb
+   brew audit --strict --formula pauyedin/hp-laserjet/hp-laserjet-mac-driver
+   brew install --build-from-source pauyedin/hp-laserjet/hp-laserjet-mac-driver
    brew test hp-laserjet-mac-driver
    ```
 
-5. Commit the formula bump on the release, so `brew` users pick it up on their
-   next `brew update`.
+5. **Commit the formula bump in the tap repo** and push it, so `brew` users pick
+   it up on their next `brew update`. Copy the same formula into this repo's
+   `Formula/` for reference.
