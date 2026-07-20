@@ -141,6 +141,20 @@ The same parsing runs automatically after every job, so these `status-line:` /
 poller or menu-bar can read device state straight from the log or by calling
 `fwload --status`. It is best-effort and never affects whether a job succeeds.
 
+## Compatibility & test reports
+
+Only the P1102 and M1005 MFP are hardware-verified; every other model shares the
+same code path but is unproven. [`TESTED.md`](TESTED.md) tracks the full
+per-model status (✅ verified / ⚠️ untested / ❌ broken) with tester and macOS
+version.
+
+**If you have any of the untested models, a report is the single most useful
+contribution you can make** — working *or* not. Open a *Test Report* issue
+(GitLab issue template) with your model, USB PID, macOS version and a scrubbed
+`watcher.log` tail; to add or fix a `model_row()` entry, use the *Add or Fix
+Model* merge-request template. Both live under `.gitlab/`. See
+`CONTRIBUTING.md`.
+
 ## Uninstall
 
 ```bash

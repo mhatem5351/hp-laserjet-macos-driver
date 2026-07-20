@@ -17,6 +17,21 @@ Open an issue on GitLab with:
 path, hostname, and the printer serial number. The project is deliberately
 built to store none of these; please keep it that way in issues too.
 
+## Submitting a test report
+
+The biggest gap in this project is verification: only the P1102 and M1005 MFP
+have been tested on real hardware. If you have any other supported model,
+reporting whether it works — or doesn't — is genuinely valuable.
+
+- Open a **Test Report** issue on GitLab (pick the *Test Report* template). It
+  asks for your model, USB PID (`ioreg -p IOUSB -l | grep idProduct`), macOS
+  version + chip, whether firmware uploaded and the page printed correctly, and
+  a scrubbed `watcher.log` tail.
+- Check the current per-model status in [`TESTED.md`](TESTED.md) first; your
+  report is what moves a ⚠️ row to ✅ or ❌.
+- The same scrubbing rule applies (no username, home path, hostname, or printer
+  serial).
+
 ## Development setup
 
 ```bash

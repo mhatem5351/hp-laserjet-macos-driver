@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   overrides. Both are optional; with neither present the driver behaves exactly
   as before. Documented in `docs/CONFIG.md`. This is groundwork for upcoming
   duplex, density and multi-printer features.
+- **`TESTED.md` compatibility matrix** — a living per-model status table (✅
+  verified / ⚠️ untested / ❌ broken) with USB PID, protocol, firmware blob,
+  tester and macOS version. Pre-filled from the model table; P1102 and M1005 MFP
+  marked verified, all others untested pending community reports.
+- **GitLab templates for community verification**: a *Test Report* issue
+  template (`.gitlab/issue_templates/`) and an *Add or Fix Model* merge-request
+  template (`.gitlab/merge_request_templates/`), both reinforcing the
+  personal-data scrubbing policy. README and `CONTRIBUTING.md` now link them.
 - **XQX protocol support (`foo2xqx`)** alongside ZjStream. The host-based
   LaserJets come in two raster dialects; the driver now handles both. XQX
   models: P1005 (`0x3d17`), P1006 (`0x3e17`), P1007 (`0x4817`),
