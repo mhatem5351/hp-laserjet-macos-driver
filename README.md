@@ -99,9 +99,14 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on HP Lase
 
 The driver works with no configuration. Optionally, an
 `~/.config/hp-laserjet/config` file (`KEY=value`) can set defaults such as
-`PAPER`, `DENSITY` and `DEFAULT_COPIES`, and a per-job `job-<ts>.opts` sidecar
-can carry per-job overrides. See [`docs/CONFIG.md`](docs/CONFIG.md) for the full
-key reference. With neither present, behaviour is unchanged.
+`PAPER`, `DENSITY`, `DEFAULT_COPIES`, `DEFAULT_DUPLEX` and `DEFAULT_NUP`, and a
+per-job `job-<ts>.opts` sidecar can carry per-job `COPIES` / `DUPLEX` / `NUP` /
+`DENSITY` overrides. The macOS print dialog's copies/two-sided/layout controls
+are **not** read (the PDF Service is sandboxed) — use the config file or sidecar
+instead. Note most supported models are simplex-only (duplex is passed through
+and logged) and the converters have no N-up (`NUP>1` is ignored). See
+[`docs/CONFIG.md`](docs/CONFIG.md) for the full key reference. With neither
+config nor sidecar present, behaviour is unchanged.
 
 ## Notes & limitations
 

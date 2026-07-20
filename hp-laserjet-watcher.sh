@@ -22,26 +22,14 @@ LOG="$SPOOL/watcher.log"
 VID=0x03f0   # HP — same vendor for the whole family
 
 # ---------------------------------------------------------------------------
-# Optional user configuration.
-#
-# ~/.config/hp-laserjet/config is a plain KEY=value shell fragment sourced by
-# the watcher. The watcher runs unsandboxed as the user, so sourcing the user's
-# own file crosses no privilege boundary — it is treated like any other dotfile
-# the user controls. All keys are optional; if the file is absent the defaults
-# below are used and behaviour is byte-for-byte identical to having no config.
-#
-#   PAPER=letter|a4|auto     paper size (default auto = detect from the PDF)
-#   DENSITY=<n>              print density; unset = driver default (no flag)
-#   DEFAULT_COPIES=<n>       default copy count for a job (default 1)
-#
-# See docs/CONFIG.md for the full description and the per-job .opts sidecar.
-# ---------------------------------------------------------------------------
 CONFIG_FILE="${HP_LASERJET_CONFIG:-$HOME/.config/hp-laserjet/config}"
 
 # Config-backed settings, with safe defaults. Populated by load_config().
 PAPER=auto
 DENSITY=""
 DEFAULT_COPIES=1
+DEFAULT_DUPLEX=none          # none | long | short
+DEFAULT_NUP=1                # pages per sheet (converters only support 1)
 
 load_config() {
     # Keep the no-config path a strict no-op: only source when the file exists.
@@ -51,6 +39,8 @@ load_config() {
     # Re-assert safe defaults for anything the file left blank or set oddly.
     case "$PAPER" in letter|a4|auto) ;; *) PAPER=auto ;; esac
     [ -n "$DEFAULT_COPIES" ] || DEFAULT_COPIES=1
+    case "$DEFAULT_DUPLEX" in none|long|short) ;; *) DEFAULT_DUPLEX=none ;; esac
+    [ -n "$DEFAULT_NUP" ] || DEFAULT_NUP=1
 }
 
 # ---------------------------------------------------------------------------
@@ -195,48 +185,130 @@ grid_for() {   # $1 = base-width  $2 = height
     echo "$(( $1 * XSCALE ))x$2"
 }
 
+# Map a friendly duplex name to the converter's numeric -d code. Both foo2zjs
+# and foo2xqx share the same DMDUPLEX_* enum (hiperc.h / hbpl.h):
+#   1 OFF   2 LONGEDGE   3 SHORTEDGE   4 MANUALLONG   5 MANUALSHORT
+duplex_code() {   # $1 = none|long|short  ->  numeric code on stdout
+    case "$1" in
+        long)  echo 2 ;;
+        short) echo 3 ;;
+        *)     echo 1 ;;   # none / unknown -> simplex
+    esac
+}
+
 # Build the raster-converter flag string for the current job. Reads the same
-# per-model values the inline block used ($DRIVER, $RES, $GDIM, $PCODE) and
-# echoes the flags on one line. foo2zjs takes ZjStream compression (-z2) and
-# -T5; foo2xqx does not. Kept a function so downstream features (density,
-# duplex, N-up) have one place to extend the flag string.
+# per-model values the inline block used ($DRIVER, $RES, $GDIM, $PCODE) and the
+# per-job option vars set by read_job_opts ($COPIES, $JOB_DUPLEX). Echoes the
+# flags on one line. foo2zjs takes ZjStream compression (-z2) and -T5; foo2xqx
+# does not.
+#
+# Extra per-job flags (appended by job_extra_flags):
+#   -n N   copies      — encoded in the ZjStream by foo2zjs. foo2xqx PARSES -n
+#                        but never writes it to the stream, so for XQX copies
+#                        are realised by pushing the raster N times (see the
+#                        job loop); we therefore omit -n there.
+#   -d N   duplex code — both converters accept it. These host-based units are
+#                        typically simplex-only (no hardware duplexer), so a
+#                        duplex request is passed through but WARNED about; on a
+#                        printer with no duplexer it simply prints one-sided.
 build_conv_flags() {
+    local base extra
     if [ "$DRIVER" = foo2xqx ]; then
-        echo "-P -L0 -r$RES -g$GDIM -p$PCODE"
+        base="-P -L0 -r$RES -g$GDIM -p$PCODE"
     else
-        echo "-z2 -P -L0 -r$RES -g$GDIM -p$PCODE -T5"
+        base="-z2 -P -L0 -r$RES -g$GDIM -p$PCODE -T5"
+    fi
+    extra=$(job_extra_flags)
+    if [ -n "$extra" ]; then
+        echo "$base $extra"
+    else
+        echo "$base"
     fi
 }
 
-# Per-job options (placeholder).
+# Compute the per-job duplex/copies flags to append to the converter command.
+# Emits nothing when the job uses the plain defaults (COPIES=1, no duplex), so
+# the default flag string stays byte-identical to the pre-feature output.
+job_extra_flags() {
+    local flags="" dc
+    # Copies: only foo2zjs encodes -n into the stream; for foo2xqx the job loop
+    # re-pushes the raster instead, so don't pass -n to it.
+    if [ "$DRIVER" != foo2xqx ] && [ "${COPIES:-1}" -gt 1 ] 2>/dev/null; then
+        flags="-n $COPIES"
+    fi
+    # Duplex: pass the code through for both converters when requested.
+    if [ "${JOB_DUPLEX:-none}" != none ]; then
+        dc=$(duplex_code "$JOB_DUPLEX")
+        flags="${flags:+$flags }-d $dc"
+    fi
+    echo "$flags"
+}
+
+# Per-job options.
 #
 # A job MAY be accompanied by a sidecar file "job-<ts>.opts" sitting next to its
 # "job-<ts>.pdf" in the spool dir. The sidecar is a plain KEY=value fragment
-# carrying per-job overrides that later features will populate and honour, e.g.:
+# carrying per-job overrides:
 #
-#   COPIES=2       duplicate the job N times     (F1/F8)
-#   DUPLEX=long    two-sided printing            (F1)
-#   NUP=2          N pages per sheet             (future)
-#   DENSITY=3      per-job print-density override(F8)
+#   COPIES=2       print N copies                (int; >=1)
+#   DUPLEX=long    two-sided: none|long|short    (simplex units: WARNED)
+#   NUP=2          N pages per sheet             (converters lack N-up; WARNED)
+#   DENSITY=3      per-job print-density override
 #
-# For now this is a no-op that only establishes the structure: it resets the
-# per-job option vars to their config/default values so each iteration starts
-# clean, and does NOT read the sidecar yet. Jobs with no .opts file are wholly
-# unaffected. Downstream features will parse "$1" here and set the vars.
+# Only these four keys are honoured; any other line is ignored. Values are read
+# with a small, injection-safe parser (the sidecar is NOT sourced). Jobs with
+# no .opts file are wholly unaffected: the vars fall back to their config /
+# built-in defaults, and job_extra_flags then emits nothing.
 read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     COPIES="$DEFAULT_COPIES"
     JOB_DENSITY="$DENSITY"
-    # Intentionally no sidecar parsing yet — see comment above.
+    JOB_DUPLEX="$DEFAULT_DUPLEX"
+    JOB_NUP="$DEFAULT_NUP"
+
+    local sidecar="$1" key val
+    if [ -f "$sidecar" ]; then
+        # Read KEY=value lines without executing the file. Ignore blanks and
+        # comments; trim surrounding whitespace on the value.
+        while IFS='=' read -r key val; do
+            key=$(printf '%s' "$key" | tr -d '[:space:]')
+            val=$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            case "$key" in
+                ''|\#*) continue ;;
+                COPIES)  [ -n "$val" ] && COPIES="$val" ;;
+                DENSITY) [ -n "$val" ] && JOB_DENSITY="$val" ;;
+                DUPLEX)  [ -n "$val" ] && JOB_DUPLEX="$val" ;;
+                NUP)     [ -n "$val" ] && JOB_NUP="$val" ;;
+            esac
+        done < "$sidecar"
+    fi
+
+    # Validate / normalise.
+    case "$COPIES" in ''|*[!0-9]*) COPIES=1 ;; esac
+    [ "$COPIES" -ge 1 ] 2>/dev/null || COPIES=1
+    case "$JOB_DUPLEX" in none|long|short) ;; *) JOB_DUPLEX=none ;; esac
+    case "$JOB_NUP" in ''|*[!0-9]*) JOB_NUP=1 ;; esac
+    [ "$JOB_NUP" -ge 1 ] 2>/dev/null || JOB_NUP=1
+
+    # Warn about requests these host-based printers / converters can't fulfil.
+    if [ "$JOB_DUPLEX" != none ]; then
+        echo "  NOTE: duplex=$JOB_DUPLEX requested — most host-based LaserJets are" >> "$LOG"
+        echo "        simplex-only (no hardware duplexer); passing -d through anyway" >> "$LOG"
+    fi
+    if [ "$JOB_NUP" -gt 1 ]; then
+        echo "  NOTE: nup=$JOB_NUP requested but neither foo2zjs nor foo2xqx supports" >> "$LOG"
+        echo "        N-up; printing 1-up. (No N-up flag exists in either.)" >> "$LOG"
+    fi
     return 0
 }
 
 shopt -s nullglob
 for PDF in "$SPOOL"/job-*.pdf; do
     echo "processing $PDF" >> "$LOG"
+    OPTS="${PDF%.pdf}.opts"
     TMP=$(mktemp /tmp/hp-laserjet.XXXXXX.raster)
 
-    # Load any per-job overrides from the sidecar (no-op placeholder for now).
-    read_job_opts "${PDF%.pdf}.opts"
+    # Load any per-job overrides from the sidecar (falls back to config).
+    read_job_opts "$OPTS"
 
     # Firmware is idempotent; push before each job in case of a power cycle.
     "$FWLOAD" "$FW" "$VID" "$PID" >>"$LOG" 2>&1 || true
@@ -265,10 +337,22 @@ for PDF in "$SPOOL"/job-*.pdf; do
     echo "  raster $sz bytes" >> "$LOG"
 
     if [ "$sz" -ge 32 ]; then
-        "$FWLOAD" "$TMP" "$VID" "$PID" >>"$LOG" 2>&1
-        echo "  fwload exit $?" >> "$LOG"
+        # foo2zjs encodes copies in-stream (-n above); foo2xqx does not, so for
+        # XQX printers we realise copies by pushing the raster N times. For
+        # foo2zjs the raster already carries the copy count, so push once.
+        pushes=1
+        if [ "$DRIVER" = foo2xqx ] && [ "${COPIES:-1}" -gt 1 ]; then
+            pushes="$COPIES"
+            echo "  foo2xqx: copies=$COPIES via $pushes raster pushes" >> "$LOG"
+        fi
+        i=1
+        while [ "$i" -le "$pushes" ]; do
+            "$FWLOAD" "$TMP" "$VID" "$PID" >>"$LOG" 2>&1
+            echo "  fwload exit $? (push $i/$pushes)" >> "$LOG"
+            i=$((i + 1))
+        done
     else
         echo "  empty conversion, skipped" >> "$LOG"
     fi
-    rm -f "$TMP" "$PDF"
+    rm -f "$TMP" "$PDF" "$OPTS"
 done
