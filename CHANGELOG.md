@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   change): run the *old* `./uninstall.sh` first, then the new `./install.sh`.
 
 ### Added
+- **Homebrew distribution.** A tap formula (`Formula/hp-laserjet-mac-driver.rb`)
+  installs the driver via `brew tap`/`brew install`; because the setuid binary,
+  launchd agent and PDF Service need `sudo` and per-user setup that can't run in
+  `brew install`, the formula stages the repo and its `caveats` point to a
+  bundled `install.sh` follow-up. See `HOMEBREW.md`.
 - **XQX protocol support (`foo2xqx`)** alongside ZjStream. The host-based
   LaserJets come in two raster dialects; the driver now handles both. XQX
   models: P1005 (`0x3d17`), P1006 (`0x3e17`), P1007 (`0x4817`),
