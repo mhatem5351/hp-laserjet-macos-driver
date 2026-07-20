@@ -12,3 +12,6 @@ launchd.err
 
 # macOS cruft
 .DS_Store
+
+# codegraph index
+.codegraph/
