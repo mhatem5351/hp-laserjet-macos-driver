@@ -25,6 +25,7 @@ cat > ~/.config/hp-laserjet/config <<'EOF'
 PAPER=auto
 # DENSITY=3
 DEFAULT_COPIES=1
+NOTIFY=all
 EOF
 ```
 
@@ -35,13 +36,38 @@ EOF
 | `PAPER`          | `letter` \| `a4` \| `auto` | `auto`  | Paper size. `auto` detects A4 vs US Letter from the PDF page height (current behaviour). |
 | `DENSITY`        | integer, or unset   | unset   | Print density. When unset, no density flag is passed and the driver default is used. |
 | `DEFAULT_COPIES` | integer ≥ 1         | `1`     | Default number of copies per job when a job does not specify its own. |
+| `NOTIFY`         | `all` \| `errors` \| `none` | `all` | macOS notifications on job completion (see below). |
 
 An unrecognised or empty `PAPER` value falls back to `auto`; an empty
-`DEFAULT_COPIES` falls back to `1`.
+`DEFAULT_COPIES` falls back to `1`; an unrecognised or empty `NOTIFY` falls back
+to `all`.
 
 > **Note:** As of this release these keys are read into the watcher but not all
 > are acted on yet — `PAPER=auto`, `DENSITY` unset and `DEFAULT_COPIES=1` (the
-> defaults) reproduce today's behaviour exactly. Later features consume the rest.
+> defaults) reproduce today's behaviour exactly. `NOTIFY` is fully acted on.
+> Later features consume the rest.
+
+### `NOTIFY` — completion notifications
+
+The watcher runs from a launchd *user agent*, so it can post a Notification
+Center banner via `osascript`. `NOTIFY` selects what is posted:
+
+| Value    | Posts                                                              |
+|----------|-------------------------------------------------------------------|
+| `all`    | Success (`Printed on <PID> (<driver>)`) **and** failures/defer.   |
+| `errors` | Failures and the "printer not detected" defer only.               |
+| `none`   | Nothing.                                                          |
+
+A failure banner appears when the conversion produces nothing, the USB push
+returns nonzero, or setup is incomplete (missing Ghostscript, converter, or
+firmware). When no supported printer is on the bus **and** a job is waiting, a
+single `Printer not detected — job queued` banner is posted (not repeated on an
+empty spool, to avoid spam when launchd re-fires).
+
+Notifications are best-effort UX only: they never influence whether or how a job
+prints, never change an exit code, and are skipped silently when `osascript` is
+unavailable. Banner text carries only the printer model/driver label and the
+outcome — never your home path, username, or other personal data.
 
 ## Per-job `.opts` sidecar
 

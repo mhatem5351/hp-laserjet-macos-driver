@@ -33,6 +33,7 @@ VID=0x03f0   # HP — same vendor for the whole family
 #   PAPER=letter|a4|auto     paper size (default auto = detect from the PDF)
 #   DENSITY=<n>              print density; unset = driver default (no flag)
 #   DEFAULT_COPIES=<n>       default copy count for a job (default 1)
+#   NOTIFY=all|errors|none   macOS notifications (default all)
 #
 # See docs/CONFIG.md for the full description and the per-job .opts sidecar.
 # ---------------------------------------------------------------------------
@@ -42,6 +43,7 @@ CONFIG_FILE="${HP_LASERJET_CONFIG:-$HOME/.config/hp-laserjet/config}"
 PAPER=auto
 DENSITY=""
 DEFAULT_COPIES=1
+NOTIFY=all
 
 load_config() {
     # Keep the no-config path a strict no-op: only source when the file exists.
@@ -51,6 +53,43 @@ load_config() {
     # Re-assert safe defaults for anything the file left blank or set oddly.
     case "$PAPER" in letter|a4|auto) ;; *) PAPER=auto ;; esac
     [ -n "$DEFAULT_COPIES" ] || DEFAULT_COPIES=1
+    case "$NOTIFY" in all|errors|none) ;; *) NOTIFY=all ;; esac
+}
+
+# ---------------------------------------------------------------------------
+# macOS user notifications (best-effort UX; never affects job processing).
+#
+# The watcher runs from a launchd *user agent*, so osascript can post a
+# Notification Center banner. A notification must never influence the pipeline
+# or a job's exit status, so every path is guarded: we skip when osascript is
+# absent and swallow any failure with `|| true`.
+#
+# Messages carry only the printer model/driver label and the job outcome —
+# never a home path, username, or other personal data.
+#
+# NOTIFY gates what is posted:
+#   all     success + failure/defer   (default)
+#   errors  failure/defer only
+#   none    nothing
+# ---------------------------------------------------------------------------
+notify() {   # $1 = level (success|error)   $2 = message
+    level="$1" ; msg="$2"
+    case "$NOTIFY" in
+        none)   return 0 ;;
+        errors) [ "$level" = success ] && return 0 ;;
+    esac
+    command -v osascript >/dev/null 2>&1 || return 0
+    # Strip characters that would break out of the AppleScript string literal.
+    msg=${msg//\\/}
+    msg=${msg//\"/}
+    osascript -e "display notification \"$msg\" with title \"HP LaserJet\"" \
+        >/dev/null 2>&1 || true
+    return 0
+}
+
+# Short, personal-data-free label for the detected printer (PID + driver).
+printer_label() {
+    echo "${PID:-?} (${DRIVER:-?})"
 }
 
 # ---------------------------------------------------------------------------
@@ -119,6 +158,7 @@ load_config
 
 if [ -z "$GS" ]; then
     echo "  ERROR: ghostscript (gs) not found — run: brew install ghostscript" >> "$LOG"
+    notify error "Setup incomplete: Ghostscript missing — run: brew install ghostscript"
     exit 1
 fi
 
@@ -161,6 +201,12 @@ else
         # bail — launchd re-runs us when the spool changes, and printing again
         # (or powering the printer on) will re-trigger detection.
         echo "  no supported printer detected — deferring queued jobs" >> "$LOG"
+        # Notify once, but only if a job is actually waiting — otherwise a
+        # launchd re-fire on an empty spool would spam the defer banner. This
+        # is a failure-class notification (suppressed when NOTIFY=none).
+        shopt -s nullglob
+        set -- "$SPOOL"/job-*.pdf
+        [ "$#" -gt 0 ] && notify error "Printer not detected — job queued"
         exit 0
     fi
 fi
@@ -181,10 +227,12 @@ echo "  printer PID=$PID driver=$DRIVER firmware=$FW_NAME res=$RES xscale=$XSCAL
 
 if [ ! -x "$CONV" ]; then
     echo "  ERROR: converter $CONV missing — re-run install.sh" >> "$LOG"
+    notify error "Setup incomplete: converter missing — re-run install.sh"
     exit 1
 fi
 if [ ! -f "$FW" ]; then
     echo "  ERROR: firmware $FW missing — re-run install.sh with printer attached" >> "$LOG"
+    notify error "Setup incomplete: firmware missing — re-run install.sh"
     exit 1
 fi
 
@@ -266,9 +314,17 @@ for PDF in "$SPOOL"/job-*.pdf; do
 
     if [ "$sz" -ge 32 ]; then
         "$FWLOAD" "$TMP" "$VID" "$PID" >>"$LOG" 2>&1
-        echo "  fwload exit $?" >> "$LOG"
+        fw_rc=$?
+        echo "  fwload exit $fw_rc" >> "$LOG"
+        if [ "$fw_rc" -eq 0 ]; then
+            notify success "Printed on $(printer_label)"
+        else
+            notify error "Print failed on $(printer_label) (push error)"
+        fi
     else
         echo "  empty conversion, skipped" >> "$LOG"
+        # Empty raster means gs or the converter produced nothing usable.
+        notify error "Print failed on $(printer_label) (conversion produced no output)"
     fi
     rm -f "$TMP" "$PDF"
 done
