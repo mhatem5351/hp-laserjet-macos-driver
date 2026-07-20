@@ -52,6 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   printer it chose and which it ignored. Firmware upload and raster geometry
   follow the *selected* printer's model row. Documented in `docs/CONFIG.md`
   ("Selecting a printer when several are connected") and `README.md`.
+- **Duplex, N-up and copies options** via the config file and per-job `.opts`
+  sidecar. `read_job_opts()` now parses `COPIES`, `DUPLEX` (`none`/`long`/`short`)
+  and `NUP` (plus the existing `DENSITY`) with an injection-safe reader, backed by
+  `DEFAULT_COPIES` / `DEFAULT_DUPLEX` / `DEFAULT_NUP` config defaults. Copies use
+  the converter's `-n` on ZjStream and re-push the raster N times on XQX (whose
+  `-n` is a no-op in the stream); duplex passes the converter's `-d` code (`long`=2,
+  `short`=3) — most supported models are simplex-only, so a duplex request is
+  passed through and logged as a NOTE. N-up is parsed but ignored (neither
+  converter supports it) with a logged NOTE. The `.opts` sidecar is removed with
+  its PDF after the job. The default path (no config, no sidecar) emits a
+  byte-identical converter flag string. Documented in `docs/CONFIG.md`.
 - **Optional configuration file.** The watcher now reads
   `~/.config/hp-laserjet/config` (a `KEY=value` shell fragment, overridable via
   `HP_LASERJET_CONFIG`) for defaults such as `PAPER`, `DENSITY` and

@@ -48,15 +48,27 @@
 					<key>COMMAND_STRING</key>
 					<string># Automator Print Plugin: macOS pipes the path of the generated
 # PDF to stdin, one path per line.
+#
+# This step runs inside the macOS print sandbox and can ONLY copy the PDF into
+# the spool — it cannot read the print dialog's Copies / Two-Sided / Layout
+# controls. To set copies / duplex / N-up, use the unsandboxed watcher's config
+# instead (see docs/CONFIG.md):
+#   * persistent defaults    -> ~/.config/hp-laserjet/config (DEFAULT_COPIES, ...)
+#   * per-print defaults      -> ~/.config/hp-laserjet/job.opts (KEY=value); if it
+#                                exists it is copied to this job's job-&lt;ts&gt;.opts
+#   * one specific job        -> drop your own job-&lt;ts&gt;.opts in the spool dir
 SPOOL="$HOME/HP-LaserJet-spool"
 mkdir -p "$SPOOL"
 DBG="$SPOOL/stub.log"
+DEFAULT_OPTS="$HOME/.config/hp-laserjet/job.opts"
 echo "=== $(date) workflow invoked ===" &gt;&gt; "$DBG"
 while IFS= read -r PDF; do
     echo "  stdin path: '$PDF'" &gt;&gt; "$DBG"
     [ -f "$PDF" ] || { echo "  not a file" &gt;&gt; "$DBG"; continue; }
     ts=$(date +%s)-$$
     if cp "$PDF" "$SPOOL/.incoming-$ts.pdf" 2&gt;&gt;"$DBG"; then
+        # Attach the user's default per-job options sidecar, if they made one.
+        [ -f "$DEFAULT_OPTS" ] &amp;&amp; cp "$DEFAULT_OPTS" "$SPOOL/job-$ts.opts" 2&gt;&gt;"$DBG"
         mv "$SPOOL/.incoming-$ts.pdf" "$SPOOL/job-$ts.pdf"
         echo "  spooled job-$ts.pdf" &gt;&gt; "$DBG"
     else

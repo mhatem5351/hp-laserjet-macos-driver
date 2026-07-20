@@ -127,12 +127,17 @@ the maintainer release checklist.
 
 The driver works with no configuration. Optionally, an
 `~/.config/hp-laserjet/config` file (`KEY=value`) can set defaults such as
-`PAPER`, `DEFAULT_COPIES`, print-quality controls `DENSITY` (`1`–`5`, the
-converter `-T` darkness flag) and `ECONOMODE` (`on`/`off`, toner-save `-t`), and
-`PRINTER` (which printer to use when several are attached); a per-job
-`job-<ts>.opts` sidecar can carry per-job overrides of the same keys. See
+`PAPER`, print-quality controls `DENSITY` (`1`–`5`, the converter `-T` darkness
+flag) and `ECONOMODE` (`on`/`off`, toner-save `-t`), copies/layout defaults
+`DEFAULT_COPIES` / `DEFAULT_DUPLEX` / `DEFAULT_NUP`, and `PRINTER` (which printer
+to use when several are attached); a per-job `job-<ts>.opts` sidecar can carry
+per-job `COPIES` / `DUPLEX` / `NUP` / `DENSITY` / `ECONOMODE` / `PRINTER`
+overrides. The macOS print dialog's copies/two-sided/layout controls are **not**
+read (the PDF Service is sandboxed) — use the config file or sidecar instead.
+Note most supported models are simplex-only (duplex is passed through and
+logged) and the converters have no N-up (`NUP>1` is ignored). See
 [`docs/CONFIG.md`](docs/CONFIG.md) for the full key reference. With neither
-present, behaviour is unchanged.
+config nor sidecar present, behaviour is unchanged.
 
 ## Notifications
 
