@@ -21,19 +21,15 @@ class HpLaserjetMacDriver < Formula
   # MAINTAINER: on each release, update the tag in this URL and the version
   # below to match, then refresh the sha256. GitLab serves a source tarball at
   # this path for any tag.
-  url "https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v1.0.0/hp-laserjet-mac-driver-v1.0.0.tar.gz"
-  version "1.0.0"
-  # MAINTAINER: REPLACE_ME with the real tarball checksum before release.
-  # Do not ship this formula with the placeholder — `brew install` will refuse
-  # a mismatched checksum. Compute it with `shasum -a 256` (see HOMEBREW.md).
-  sha256 "REPLACE_ME"
+  url "https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v0.1/hp-laserjet-mac-driver-v0.1.tar.gz"
+  sha256 "d40ed2c5bc4be2f9f0a4a028a4b84e6f95424cdfeaea909260ef82a82e2cd2bd"
 
   license "GPL-2.0-only"
 
   depends_on "ghostscript"
   depends_on "libusb"
-  depends_on "poppler"
   depends_on :macos
+  depends_on "poppler"
 
   def install
     # Stage the whole repo so the bundled install.sh can build + install with
@@ -56,7 +52,7 @@ class HpLaserjetMacDriver < Formula
   def caveats
     <<~EOS
       This formula only stages the driver files. It cannot install the
-      setuid-root USB pusher, the launchd agent, or the Print-dialog PDF
+      root-owned USB pusher, the launchd agent, or the Print-dialog PDF
       Service, because those require sudo and per-user setup that must not run
       inside `brew install`.
 
@@ -78,14 +74,14 @@ class HpLaserjetMacDriver < Formula
   test do
     # Lightweight checks only — no printer, no sudo, no build.
     # The installer and the sources brew staged must be present.
-    assert_predicate libexec/"install.sh", :exist?, "bundled install.sh missing"
+    assert_path_exists libexec/"install.sh", "bundled install.sh missing"
     assert_predicate bin/"hp-laserjet-install", :executable?
 
     # The USB pusher source and the raster-converter tarball must be shipped so
     # `install.sh` can build them (foo2zjs/foo2xqx from the vendored tarball,
     # fwload from src/fwload.c).
-    assert_predicate libexec/"src/fwload.c", :exist?, "fwload.c source missing"
-    assert_predicate libexec/"vendor/foo2zjs-src.tar.gz", :exist?, "foo2zjs source tarball missing"
+    assert_path_exists libexec/"src/fwload.c", "fwload.c source missing"
+    assert_path_exists libexec/"vendor/foo2zjs-src.tar.gz", "foo2zjs source tarball missing"
 
     # install.sh names both drivers; assert the build tooling references them.
     installer = (libexec/"install.sh").read
