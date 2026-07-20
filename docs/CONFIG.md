@@ -1,0 +1,71 @@
+# Configuration
+
+`hp-laserjet-watcher.sh` runs with sensible defaults and needs no configuration.
+Two optional mechanisms let you change its behaviour: a persistent **user config
+file** and a per-job **`.opts` sidecar**.
+
+With neither present, the watcher behaves exactly as it always has — the config
+layer is purely additive.
+
+## User config file
+
+Path: `~/.config/hp-laserjet/config`
+(override with the `HP_LASERJET_CONFIG` environment variable).
+
+It is a plain `KEY=value` shell fragment, sourced by the watcher at startup. The
+watcher runs unsandboxed as your user, so sourcing a file you own crosses no
+privilege boundary — treat it like any other dotfile under your control. Keep it
+to simple assignments; anything valid in `sh` is executed.
+
+Create the directory and file:
+
+```sh
+mkdir -p ~/.config/hp-laserjet
+cat > ~/.config/hp-laserjet/config <<'EOF'
+PAPER=auto
+# DENSITY=3
+DEFAULT_COPIES=1
+EOF
+```
+
+### Keys
+
+| Key              | Values              | Default | Meaning                                                        |
+|------------------|---------------------|---------|----------------------------------------------------------------|
+| `PAPER`          | `letter` \| `a4` \| `auto` | `auto`  | Paper size. `auto` detects A4 vs US Letter from the PDF page height (current behaviour). |
+| `DENSITY`        | integer, or unset   | unset   | Print density. When unset, no density flag is passed and the driver default is used. |
+| `DEFAULT_COPIES` | integer ≥ 1         | `1`     | Default number of copies per job when a job does not specify its own. |
+
+An unrecognised or empty `PAPER` value falls back to `auto`; an empty
+`DEFAULT_COPIES` falls back to `1`.
+
+> **Note:** As of this release these keys are read into the watcher but not all
+> are acted on yet — `PAPER=auto`, `DENSITY` unset and `DEFAULT_COPIES=1` (the
+> defaults) reproduce today's behaviour exactly. Later features consume the rest.
+
+## Per-job `.opts` sidecar
+
+A single print job MAY be accompanied by a sidecar file sitting next to its PDF
+in the spool directory:
+
+```
+~/HP-LaserJet-spool/job-<ts>.pdf     the job
+~/HP-LaserJet-spool/job-<ts>.opts    its per-job options (optional)
+```
+
+The sidecar is the same `KEY=value` format and carries **per-job** overrides
+that take precedence over the user config file for that one job. Planned keys:
+
+| Key       | Example      | Meaning                          |
+|-----------|--------------|----------------------------------|
+| `COPIES`  | `COPIES=2`   | Number of copies for this job.   |
+| `DUPLEX`  | `DUPLEX=long`| Two-sided printing.              |
+| `NUP`     | `NUP=2`      | Pages per sheet (N-up).          |
+| `DENSITY` | `DENSITY=3`  | Print-density override.          |
+
+The watcher already looks for the sidecar via `read_job_opts` in the per-job
+loop, but that function is currently a no-op placeholder: it resets the per-job
+option variables to their config/default values and does **not** yet parse the
+sidecar. Jobs without a `.opts` file are wholly unaffected. Downstream features
+(duplex, notifications, multi-printer, density) populate both this parser and
+the option handling.

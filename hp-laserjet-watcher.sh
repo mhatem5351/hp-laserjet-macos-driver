@@ -22,6 +22,38 @@ LOG="$SPOOL/watcher.log"
 VID=0x03f0   # HP — same vendor for the whole family
 
 # ---------------------------------------------------------------------------
+# Optional user configuration.
+#
+# ~/.config/hp-laserjet/config is a plain KEY=value shell fragment sourced by
+# the watcher. The watcher runs unsandboxed as the user, so sourcing the user's
+# own file crosses no privilege boundary — it is treated like any other dotfile
+# the user controls. All keys are optional; if the file is absent the defaults
+# below are used and behaviour is byte-for-byte identical to having no config.
+#
+#   PAPER=letter|a4|auto     paper size (default auto = detect from the PDF)
+#   DENSITY=<n>              print density; unset = driver default (no flag)
+#   DEFAULT_COPIES=<n>       default copy count for a job (default 1)
+#
+# See docs/CONFIG.md for the full description and the per-job .opts sidecar.
+# ---------------------------------------------------------------------------
+CONFIG_FILE="${HP_LASERJET_CONFIG:-$HOME/.config/hp-laserjet/config}"
+
+# Config-backed settings, with safe defaults. Populated by load_config().
+PAPER=auto
+DENSITY=""
+DEFAULT_COPIES=1
+
+load_config() {
+    # Keep the no-config path a strict no-op: only source when the file exists.
+    [ -f "$CONFIG_FILE" ] || return 0
+    # shellcheck source=/dev/null
+    . "$CONFIG_FILE"
+    # Re-assert safe defaults for anything the file left blank or set oddly.
+    case "$PAPER" in letter|a4|auto) ;; *) PAPER=auto ;; esac
+    [ -n "$DEFAULT_COPIES" ] || DEFAULT_COPIES=1
+}
+
+# ---------------------------------------------------------------------------
 # Model table. Keyed by the USB product id (hex, lowercase). Each row is:
 #
 #   driver      firmware(.dl)   RES        XSCALE
@@ -81,6 +113,9 @@ PDFINFO=$(find_bin pdfinfo)
 # Keep the log from growing forever.
 [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 200000 ] && : > "$LOG"
 echo "=== $(date) watcher woke ===" >> "$LOG"
+
+# Load optional user config (no-op when the file is absent).
+load_config
 
 if [ -z "$GS" ]; then
     echo "  ERROR: ghostscript (gs) not found — run: brew install ghostscript" >> "$LOG"
@@ -160,10 +195,48 @@ grid_for() {   # $1 = base-width  $2 = height
     echo "$(( $1 * XSCALE ))x$2"
 }
 
+# Build the raster-converter flag string for the current job. Reads the same
+# per-model values the inline block used ($DRIVER, $RES, $GDIM, $PCODE) and
+# echoes the flags on one line. foo2zjs takes ZjStream compression (-z2) and
+# -T5; foo2xqx does not. Kept a function so downstream features (density,
+# duplex, N-up) have one place to extend the flag string.
+build_conv_flags() {
+    if [ "$DRIVER" = foo2xqx ]; then
+        echo "-P -L0 -r$RES -g$GDIM -p$PCODE"
+    else
+        echo "-z2 -P -L0 -r$RES -g$GDIM -p$PCODE -T5"
+    fi
+}
+
+# Per-job options (placeholder).
+#
+# A job MAY be accompanied by a sidecar file "job-<ts>.opts" sitting next to its
+# "job-<ts>.pdf" in the spool dir. The sidecar is a plain KEY=value fragment
+# carrying per-job overrides that later features will populate and honour, e.g.:
+#
+#   COPIES=2       duplicate the job N times     (F1/F8)
+#   DUPLEX=long    two-sided printing            (F1)
+#   NUP=2          N pages per sheet             (future)
+#   DENSITY=3      per-job print-density override(F8)
+#
+# For now this is a no-op that only establishes the structure: it resets the
+# per-job option vars to their config/default values so each iteration starts
+# clean, and does NOT read the sidecar yet. Jobs with no .opts file are wholly
+# unaffected. Downstream features will parse "$1" here and set the vars.
+read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
+    COPIES="$DEFAULT_COPIES"
+    JOB_DENSITY="$DENSITY"
+    # Intentionally no sidecar parsing yet — see comment above.
+    return 0
+}
+
 shopt -s nullglob
 for PDF in "$SPOOL"/job-*.pdf; do
     echo "processing $PDF" >> "$LOG"
     TMP=$(mktemp /tmp/hp-laserjet.XXXXXX.raster)
+
+    # Load any per-job overrides from the sidecar (no-op placeholder for now).
+    read_job_opts "${PDF%.pdf}.opts"
 
     # Firmware is idempotent; push before each job in case of a power cycle.
     "$FWLOAD" "$FW" "$VID" "$PID" >>"$LOG" 2>&1 || true
@@ -180,11 +253,8 @@ for PDF in "$SPOOL"/job-*.pdf; do
 
     # Both gs and the converter share -r/-g/-p; -dPDFFitPage scales into the
     # grid. foo2zjs takes -z (ZjStream compression); foo2xqx has no -z.
-    if [ "$DRIVER" = foo2xqx ]; then
-        CONV_FLAGS="-P -L0 -r$RES -g$GDIM -p$PCODE"
-    else
-        CONV_FLAGS="-z2 -P -L0 -r$RES -g$GDIM -p$PCODE -T5"
-    fi
+    # build_conv_flags() emits the exact flag string for this driver/geometry.
+    CONV_FLAGS=$(build_conv_flags)
     "$GS" -q -dBATCH -dSAFER -dQUIET -dNOPAUSE \
           -sDEVICE=pbmraw -r$RES -g$GDIM \
           -dFIXEDMEDIA -dPDFFitPage \

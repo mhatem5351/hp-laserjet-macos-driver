@@ -16,8 +16,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   entry "Print on P1102" → "Print on HP LaserJet".
   **Upgrading breaks an existing install** (the launchd label and spool path
   change): run the *old* `./uninstall.sh` first, then the new `./install.sh`.
+- **Internal refactor for extensibility (no behaviour change).** The inline
+  converter-flag block became a `build_conv_flags()` function, config loading
+  moved into `load_config()`, and a `read_job_opts()` per-job hook (currently a
+  no-op placeholder) was wired into the job loop. The flag strings emitted are
+  byte-identical to before.
 
 ### Added
+- **Optional configuration file.** The watcher now reads
+  `~/.config/hp-laserjet/config` (a `KEY=value` shell fragment, overridable via
+  `HP_LASERJET_CONFIG`) for defaults such as `PAPER`, `DENSITY` and
+  `DEFAULT_COPIES`, and recognises a per-job `job-<ts>.opts` sidecar for per-job
+  overrides. Both are optional; with neither present the driver behaves exactly
+  as before. Documented in `docs/CONFIG.md`. This is groundwork for upcoming
+  duplex, density and multi-printer features.
 - **XQX protocol support (`foo2xqx`)** alongside ZjStream. The host-based
   LaserJets come in two raster dialects; the driver now handles both. XQX
   models: P1005 (`0x3d17`), P1006 (`0x3e17`), P1007 (`0x4817`),
