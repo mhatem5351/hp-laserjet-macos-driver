@@ -2,11 +2,20 @@
 // ZjStream (foo2zjs) and XQX (foo2xqx) families. Opens the printer, selects the
 // USB Printer-class interface (falling back to the first bulk-OUT interface for
 // single-function models), and streams the given blob (firmware or page data).
+// After a transfer it drains the bulk-IN endpoint and parses any PJL/device
+// status reply into "status-line: " / "status-kv: " lines for the watcher log.
 //
 // usage: fwload <blob> [VID] [PID]
 //   VID/PID are optional hex (e.g. 0x03f0 0x002a); default to the P1102.
 //   This lets one binary drive any model in the family — the watcher passes
 //   the detected printer's IDs.
+//
+// usage: fwload --status [VID] [PID]
+//   Skips sending any blob: opens the printer, sends a PJL status query to the
+//   bulk-OUT endpoint, then reads and prints the bulk-IN reply the same way as
+//   the post-transfer read-back. Lets the watcher / a menu-bar poll device
+//   status without printing.
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,24 +24,138 @@
 #define DEFAULT_VID 0x03f0
 #define DEFAULT_PID 0x002a
 
+// PJL status query, wrapped in the Universal Exit Language escape. Sent to the
+// printer's bulk-OUT in --status mode so the bulk-IN read-back has something to
+// report even when we are not printing.
+#define PJL_STATUS_QUERY \
+    "\x1b%-12345X@PJL INFO STATUS\r\n@PJL INFO PAGECOUNT\r\n"
+
+// Recognizable PJL status tokens. A reply line containing any of these is
+// echoed with a "status-kv: " prefix so the watcher log can be parsed for
+// device state (online/offline, toner, page count, display messages).
+static const char *PJL_TOKENS[] = {
+    "CODE=", "DISPLAY=", "ONLINE", "TONER", "PAGECOUNT", "PAGES", NULL
+};
+
+// Does a line contain a recognizable PJL status token?
+static int has_pjl_token(const char *line) {
+    for (int i = 0; PJL_TOKENS[i]; i++)
+        if (strstr(line, PJL_TOKENS[i])) return 1;
+    return 0;
+}
+
+// Drain the bulk-IN endpoint after a transfer (or status query) and report what
+// the printer said. Best-effort and purely diagnostic: it must NEVER change the
+// caller's exit status. Any bytes back is proof the device reacted; readable
+// ASCII lines are echoed as "status-line: " (and "status-kv: " when they carry
+// a known PJL token); binary/empty replies keep the byte-count summary.
+//
+// Bounds match the historical read-back exactly: whole-wMaxPacketSize reads,
+// 500ms timeouts, capped at 64 reads so we can never hang.
+static void read_status(libusb_device_handle *h, int ep_in, int ep_in_max) {
+    if (ep_in < 0) return;
+
+    int bufsz = ep_in_max > 0 ? ep_in_max : 64;
+    // Accumulate the whole reply so we can split it into lines afterwards.
+    long cap = (long)bufsz * 64;
+    unsigned char *reply = malloc(cap);
+    unsigned char *pkt = malloc(bufsz);
+    long total = 0;
+    int sr = 0, reads = 0;
+    while (reply && pkt && reads < 64) {    // cap reads so we never hang
+        int got = 0;
+        sr = libusb_bulk_transfer(h, ep_in, pkt, bufsz, &got, 500);
+        if (sr) break;
+        if (got > 0 && total < cap) {
+            long room = cap - total;
+            int copy = got < room ? got : (int)room;
+            memcpy(reply + total, pkt, copy);
+            total += copy;
+        }
+        reads++;
+        if (got < bufsz) break;             // short packet ends the reply
+    }
+    free(pkt);
+
+    if (total <= 0) {
+        if (sr == LIBUSB_ERROR_TIMEOUT)
+            printf("status: no reply within 500ms (printer may still be processing)\n");
+        else if (sr)
+            printf("status: bulk-IN %s\n", libusb_error_name(sr));
+        free(reply);
+        return;
+    }
+
+    printf("status: read %ld bytes back (printer replied)\n", total);
+
+    // Walk the reply as text lines (split on \r and \n). Emit any line that is
+    // wholly printable ASCII as "status-line: "; if it carries a known PJL
+    // token, also emit it as "status-kv: ". Lines with non-printable bytes are
+    // treated as binary and left to the byte-count summary above.
+    int printable_lines = 0;
+    long i = 0;
+    while (i < total) {
+        long start = i;
+        while (i < total && reply[i] != '\n' && reply[i] != '\r') i++;
+        long linelen = i - start;
+        while (i < total && (reply[i] == '\n' || reply[i] == '\r')) i++;
+        if (linelen == 0) continue;
+
+        int ok = 1;
+        for (long j = 0; j < linelen; j++) {
+            unsigned char c = reply[start + j];
+            if (!isprint(c) && c != '\t') { ok = 0; break; }
+        }
+        if (!ok) continue;
+
+        // NUL-terminate a copy of the line for printing / token matching.
+        char *line = malloc(linelen + 1);
+        if (!line) continue;
+        memcpy(line, reply + start, linelen);
+        line[linelen] = '\0';
+
+        printf("status-line: %s\n", line);
+        printable_lines++;
+        if (has_pjl_token(line))
+            printf("status-kv: %s\n", line);
+        free(line);
+    }
+    if (printable_lines == 0)
+        printf("status: reply is binary (no readable status lines)\n");
+
+    free(reply);
+}
+
 int main(int argc, char **argv) {
-    if (argc < 2) {
+    // --status mode: no blob, just query + read the printer's status reply.
+    int status_mode = (argc >= 2 && strcmp(argv[1], "--status") == 0);
+
+    if (!status_mode && argc < 2) {
         fprintf(stderr, "usage: %s blob [VID] [PID]\n", argv[0]);
+        fprintf(stderr, "       %s --status [VID] [PID]\n", argv[0]);
         return 2;
     }
 
-    // Optional VID/PID override (hex or decimal via strtol base 0).
+    // Optional VID/PID override (hex or decimal via strtol base 0). Both modes
+    // take them as argv[2]/argv[3]: in normal mode argv[1] is the blob, in
+    // --status mode argv[1] is the "--status" flag, so the positions line up.
     int vid = DEFAULT_VID, pid = DEFAULT_PID;
     if (argc >= 3) vid = (int)strtol(argv[2], NULL, 0);
     if (argc >= 4) pid = (int)strtol(argv[3], NULL, 0);
 
-    FILE *f = fopen(argv[1], "rb");
-    if (!f) { perror("open firmware"); return 2; }
-    fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
-    unsigned char *buf = malloc(len);
-    if (fread(buf, 1, len, f) != (size_t)len) { perror("read"); return 2; }
-    fclose(f);
-    printf("firmware: %ld bytes\n", len);
+    unsigned char *buf = NULL;
+    long len = 0;
+    if (!status_mode) {
+        FILE *f = fopen(argv[1], "rb");
+        if (!f) { perror("open firmware"); return 2; }
+        fseek(f, 0, SEEK_END); len = ftell(f); fseek(f, 0, SEEK_SET);
+        buf = malloc(len);
+        if (fread(buf, 1, len, f) != (size_t)len) { perror("read"); return 2; }
+        fclose(f);
+        printf("firmware: %ld bytes\n", len);
+    } else {
+        printf("status query mode (no blob sent)\n");
+    }
 
     libusb_context *ctx = NULL;
     if (libusb_init(&ctx)) { fprintf(stderr, "libusb_init failed\n"); return 1; }
@@ -90,6 +213,15 @@ int main(int argc, char **argv) {
     int r = libusb_claim_interface(h, iface);
     if (r) { fprintf(stderr, "claim_interface: %s\n", libusb_error_name(r)); return 1; }
 
+    // In --status mode there is no page/firmware blob: push a PJL status query
+    // instead so the bulk-IN read-back below has a reply to parse. In normal
+    // mode we point the same send loop at the caller's blob. Either way "sent"
+    // must equal the number of bytes we meant to send for a clean exit.
+    if (status_mode) {
+        buf = (unsigned char *)PJL_STATUS_QUERY;
+        len = (long)strlen(PJL_STATUS_QUERY);
+    }
+
     int sent = 0;
     while (sent < len) {
         int chunk = len - sent; if (chunk > 4096) chunk = 4096;
@@ -98,36 +230,18 @@ int main(int argc, char **argv) {
         if (r) { fprintf(stderr, "bulk_transfer: %s (sent %d)\n", libusb_error_name(r), sent); break; }
         sent += transferred;
     }
-    printf("sent %d/%ld bytes\n", sent, len);
+    if (status_mode)
+        printf("sent %d/%ld bytes (PJL status query)\n", sent, len);
+    else
+        printf("sent %d/%ld bytes\n", sent, len);
 
     // Best-effort status read-back. A wrong-interface bulk-OUT accepts every
     // byte and returns success, so a clean "sent N/N" alone cannot confirm the
     // printer took the data. If the interface exposes a bulk-IN, drain it: any
-    // bytes back is proof the device is reacting. Read whole wMaxPacketSize
-    // buffers and loop until a short/empty packet ends the reply — a single
-    // 64-byte read got LIBUSB_ERROR_OVERFLOW because the printer answers with
-    // more than that. Purely diagnostic — never fails the transfer.
-    if (ep_in >= 0) {
-        int bufsz = ep_in_max > 0 ? ep_in_max : 64;
-        unsigned char *st = malloc(bufsz);
-        long total = 0;
-        int sr = 0, reads = 0;
-        while (st && reads < 64) {          // cap reads so we never hang
-            int got = 0;
-            sr = libusb_bulk_transfer(h, ep_in, st, bufsz, &got, 500);
-            if (sr) break;
-            total += got;
-            reads++;
-            if (got < bufsz) break;         // short packet ends the reply
-        }
-        free(st);
-        if (total > 0)
-            printf("status: read %ld bytes back (printer replied)\n", total);
-        else if (sr == LIBUSB_ERROR_TIMEOUT)
-            printf("status: no reply within 500ms (printer may still be processing)\n");
-        else if (sr)
-            printf("status: bulk-IN %s\n", libusb_error_name(sr));
-    }
+    // bytes back is proof the device is reacting, and PJL replies carry
+    // human-readable status lines (echoed as "status-line: " / "status-kv: ").
+    // Purely diagnostic — never fails the transfer.
+    read_status(h, ep_in, ep_in_max);
 
     libusb_release_interface(h, iface);
     libusb_close(h);

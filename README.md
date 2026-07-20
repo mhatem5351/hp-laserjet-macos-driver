@@ -111,6 +111,28 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on HP Lase
   not this software. Shake the cartridge; replace if it persists.
 - Monochrome only (they're mono lasers).
 
+## Printer status
+
+`fwload` can query the printer's status without printing a page:
+
+```bash
+/usr/local/share/foo2zjs/fwload --status 0x03f0 <PID>
+```
+
+`<PID>` is the printer's USB product id (e.g. `0x002a` for the P1102; see the
+`model_row` table in `hp-laserjet-watcher.sh`). This sends a PJL status query
+(`@PJL INFO STATUS` / `@PJL INFO PAGECOUNT`) to the printer and prints its reply:
+
+- `status-line: …` — any human-readable text line the printer returned.
+- `status-kv: …` — lines carrying a recognized PJL token (`CODE=`, `DISPLAY=`,
+  `ONLINE`, `TONER`, `PAGECOUNT`, `PAGES`), i.e. the parseable status values.
+- A byte-count summary if the reply is binary or empty.
+
+The same parsing runs automatically after every job, so these `status-line:` /
+`status-kv:` lines also appear in `~/HP-LaserJet-spool/watcher.log` — a status
+poller or menu-bar can read device state straight from the log or by calling
+`fwload --status`. It is best-effort and never affects whether a job succeeds.
+
 ## Uninstall
 
 ```bash

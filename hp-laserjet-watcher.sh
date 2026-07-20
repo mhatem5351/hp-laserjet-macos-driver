@@ -195,6 +195,11 @@ for PDF in "$SPOOL"/job-*.pdf; do
     echo "  raster $sz bytes" >> "$LOG"
 
     if [ "$sz" -ge 32 ]; then
+        # fwload's stdout (redirected to LOG) now includes the parsed bulk-IN
+        # read-back: "status-line: " for any human-readable device text and
+        # "status-kv: " for recognized PJL tokens (ONLINE, TONER, PAGECOUNT,
+        # CODE=, DISPLAY=, ...). These lines are grep-parseable from watcher.log
+        # by a status poller / menu-bar without printing (see `fwload --status`).
         "$FWLOAD" "$TMP" "$VID" "$PID" >>"$LOG" 2>&1
         echo "  fwload exit $?" >> "$LOG"
     else
