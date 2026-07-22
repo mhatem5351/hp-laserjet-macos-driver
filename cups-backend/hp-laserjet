@@ -1,0 +1,176 @@
+#!/bin/bash
+# ============================================================================
+#  hp-laserjet-mac-driver — OPTIONAL CUPS spooling backend
+#
+#  A thin CUPS *backend* that lets a host-based HP LaserJet appear in
+#  System Settings > Printers (and be AirPrint-shared to iPhones/iPads)
+#  WITHOUT reintroducing the "CUPS touches USB" problem this project exists
+#  to avoid.
+#
+#  It does exactly ONE thing: it drops the job CUPS hands it into the same
+#  ~/HP-LaserJet-spool/ directory the sandboxed PDF Service uses, as an
+#  atomically-renamed job-<ts>.pdf. The existing unsandboxed launchd watcher
+#  (hp-laserjet-watcher.sh) then does ALL the real work — model detection,
+#  firmware upload, rasterisation, and the USB transfer.
+#
+#  This backend NEVER execs fwload and NEVER touches USB. It is a job intake
+#  path only, mirroring PDFService/document.wflow. That is what keeps it safe:
+#  the thing that fails on modern macOS is a CUPS filter/backend doing USB or
+#  exec'ing binaries from /usr/local (Operation not permitted under the CUPS
+#  sandbox). Spooling a file to $HOME is not sandboxed away, so this works.
+#
+#  CUPS backend interface (see cups/backend.h):
+#    * no arguments        -> print device-discovery line(s) on stdout, exit 0
+#    * job-id user title copies options [filename]
+#                          -> read the job (from the file arg, else stdin) and
+#                             spool it; exit with a CUPS backend status code.
+#
+#  Part of hp-laserjet-mac-driver.  License: GPL-2.0.
+# ============================================================================
+
+# ---- CUPS backend exit codes (cups/backend.h) ------------------------------
+CUPS_BACKEND_OK=0            # job spooled successfully
+CUPS_BACKEND_FAILED=1        # job failed, do not retry unless configured
+CUPS_BACKEND_STOP=4          # stop the queue
+
+# ---------------------------------------------------------------------------
+# Device discovery: CUPS calls the backend with NO arguments to enumerate
+# devices. We advertise a single virtual "device". "direct" tells CUPS this
+# is a directly-attached (non-network) backend.
+#
+#   Format:  <method> <uri> "<make-and-model>" "<info>" ["<device-id>"]
+# ---------------------------------------------------------------------------
+if [ "$#" -eq 0 ]; then
+    echo 'direct hp-laserjet://spool "HP LaserJet" "HP LaserJet (host-based)" "MFG:HP;MDL:LaserJet;CMD:GDI;"'
+    exit "$CUPS_BACKEND_OK"
+fi
+
+# ---------------------------------------------------------------------------
+# Print a job.  argv (1-based, as CUPS passes them):
+#   $1 job-id   $2 user   $3 title   $4 copies   $5 options   [$6 filename]
+# When $6 is absent the job data arrives on stdin.
+# ---------------------------------------------------------------------------
+JOB_ID="${1:-0}"
+JOB_USER="${2:-unknown}"
+JOB_TITLE="${3:-}"
+JOB_FILE="${6:-}"
+
+# Resolve the spool dir at runtime. CUPS backends usually run as root, so
+# $HOME may be unset or point at root's home; fall back through the CUPS
+# job owner's ($2) home. Never hardcode a username or a personal path.
+resolve_home() {
+    if [ -n "${HOME:-}" ] && [ "$HOME" != "/" ] && [ "$HOME" != "/var/root" ] && [ "$HOME" != "/root" ]; then
+        printf '%s\n' "$HOME"
+        return
+    fi
+    # CUPS sets HOME for the *backend* to root; the job's owner is $2.
+    # Ask the directory service for that user's home directory.
+    if [ -n "$JOB_USER" ] && [ "$JOB_USER" != "unknown" ] && [ "$JOB_USER" != "root" ]; then
+        h="$(/usr/bin/dscl . -read "/Users/$JOB_USER" NFSHomeDirectory 2>/dev/null \
+                | awk '/NFSHomeDirectory:/ {print $2}')"
+        if [ -n "$h" ] && [ -d "$h" ]; then
+            printf '%s\n' "$h"
+            return
+        fi
+    fi
+    # Last resort: whatever HOME we were given (even if root's).
+    printf '%s\n' "${HOME:-/tmp}"
+}
+
+HOME_DIR="$(resolve_home)"
+SPOOL="$HOME_DIR/HP-LaserJet-spool"
+LOG="$SPOOL/backend.log"
+
+mkdir -p "$SPOOL" 2>/dev/null
+
+log() { echo "$(date '+%Y-%m-%dT%H:%M:%S') [cups-backend] $*" >> "$LOG" 2>/dev/null; }
+
+log "job=$JOB_ID user=$JOB_USER title='$JOB_TITLE' file='${JOB_FILE:-<stdin>}' spool=$SPOOL"
+
+# Unique, collision-free stem shared by the temp and final names.
+ts="$(date +%s)-$$-$JOB_ID"
+INCOMING="$SPOOL/.incoming-$ts"
+FINAL="$SPOOL/job-$ts.pdf"
+
+# ---------------------------------------------------------------------------
+# Materialise the job bytes into a temp file first (so we can sniff/convert),
+# then produce a PDF at $INCOMING.pdf, then atomically rename to job-*.pdf so
+# the watcher never sees a partial file — the same pattern the PDF Service and
+# the watcher rely on.
+# ---------------------------------------------------------------------------
+RAW="$INCOMING.raw"
+if [ -n "$JOB_FILE" ] && [ -f "$JOB_FILE" ]; then
+    cp "$JOB_FILE" "$RAW" 2>>"$LOG" || { log "cp of job file FAILED"; exit "$CUPS_BACKEND_FAILED"; }
+else
+    cat > "$RAW" 2>>"$LOG" || { log "read of stdin FAILED"; exit "$CUPS_BACKEND_FAILED"; }
+fi
+
+if [ ! -s "$RAW" ]; then
+    log "empty job — nothing to spool"
+    rm -f "$RAW"
+    exit "$CUPS_BACKEND_FAILED"
+fi
+
+# Locate Ghostscript (Homebrew installs it under the brew prefix, which is not
+# on the minimal PATH CUPS gives a backend).
+find_gs() {
+    if command -v gs >/dev/null 2>&1; then command -v gs; return; fi
+    for c in /opt/homebrew/bin/gs /usr/local/bin/gs; do
+        [ -x "$c" ] && { echo "$c"; return; }
+    done
+    echo gs   # will fail loudly if truly absent
+}
+
+# Sniff the format. The watcher only understands PDF, so convert PostScript
+# (what CUPS commonly hands a backend on a raw/generic queue) to PDF.
+magic="$(head -c 4 "$RAW" 2>/dev/null)"
+case "$magic" in
+    '%PDF')
+        # Already PDF — just move it into place.
+        mv "$RAW" "$INCOMING.pdf" 2>>"$LOG" || { log "rename raw->pdf FAILED"; rm -f "$RAW"; exit "$CUPS_BACKEND_FAILED"; }
+        ;;
+    '%!PS'|'%!'*)
+        # PostScript (possibly with a DSC header). Convert PS -> PDF.
+        if command -v pstopdf >/dev/null 2>&1; then
+            pstopdf "$RAW" -o "$INCOMING.pdf" >>"$LOG" 2>&1
+        fi
+        if [ ! -s "$INCOMING.pdf" ]; then
+            # pstopdf is gone on recent macOS; fall back to Ghostscript.
+            GS="$(find_gs)"
+            "$GS" -q -dNOPAUSE -dBATCH -dSAFER -sDEVICE=pdfwrite \
+                  -sOutputFile="$INCOMING.pdf" "$RAW" >>"$LOG" 2>&1
+        fi
+        rm -f "$RAW"
+        if [ ! -s "$INCOMING.pdf" ]; then
+            log "PS->PDF conversion FAILED (need pstopdf or ghostscript)"
+            exit "$CUPS_BACKEND_FAILED"
+        fi
+        ;;
+    *)
+        # Unknown format. Try Ghostscript as a best-effort PDF producer; if it
+        # can't, refuse rather than spool garbage the watcher will misprint.
+        GS="$(find_gs)"
+        if "$GS" -q -dNOPAUSE -dBATCH -dSAFER -sDEVICE=pdfwrite \
+                 -sOutputFile="$INCOMING.pdf" "$RAW" >>"$LOG" 2>&1 && [ -s "$INCOMING.pdf" ]; then
+            log "converted non-PDF/PS input to PDF via ghostscript"
+        else
+            log "unrecognised job format (magic='$magic') — cannot convert; refusing"
+            rm -f "$RAW" "$INCOMING.pdf"
+            exit "$CUPS_BACKEND_FAILED"
+        fi
+        rm -f "$RAW"
+        ;;
+esac
+
+# Atomic publish: the watcher's WatchPaths fires on this rename.
+mv "$INCOMING.pdf" "$FINAL" 2>>"$LOG" || { log "publish rename FAILED"; rm -f "$INCOMING.pdf"; exit "$CUPS_BACKEND_FAILED"; }
+
+# Make the file owned by the user whose watcher will pick it up (the backend
+# often runs as root). Best-effort; the watcher runs as the user and only
+# needs read access.
+if [ -n "$JOB_USER" ] && [ "$JOB_USER" != "unknown" ] && [ "$JOB_USER" != "root" ]; then
+    chown "$JOB_USER" "$FINAL" 2>/dev/null || true
+fi
+
+log "spooled $FINAL (the unsandboxed watcher will print it)"
+exit "$CUPS_BACKEND_OK"
