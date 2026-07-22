@@ -21,8 +21,8 @@ class HpLaserjetMacDriver < Formula
   # MAINTAINER: on each release, update the tag in this URL and the version
   # below to match, then refresh the sha256. GitLab serves a source tarball at
   # this path for any tag.
-  url "https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v0.1/hp-laserjet-mac-driver-v0.1.tar.gz"
-  sha256 "d40ed2c5bc4be2f9f0a4a028a4b84e6f95424cdfeaea909260ef82a82e2cd2bd"
+  url "https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v0.2.0/hp-laserjet-mac-driver-v0.2.0.tar.gz"
+  sha256 "REPLACE_ME_AFTER_TAG_PUSH"
 
   license "GPL-2.0-only"
 

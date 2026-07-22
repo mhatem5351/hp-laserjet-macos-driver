@@ -5,7 +5,61 @@ All notable changes to **hp-laserjet-mac-driver** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-22
+
+### Added
+- **Scanner support scaffolding for the M1005 MFP (`scanner/`).** A libusb probe
+  skeleton (`hp-scan.c`) plus protocol notes (`README.md`, `PROTOCOL.md`). This
+  is **scaffolding only, not a working scanner** — it opens VID `0x03f0` + PID,
+  selects the vendor-specific scan interface (interface 0, class `0xFF`), prints
+  its endpoint descriptors, and sends only a clearly-marked *placeholder*
+  command, logging whatever comes back. The real scan command/data handshake is
+  unknown and needs a USB capture (or a port of SANE's `hpaio`); `PROTOCOL.md`
+  is the template for a hardware owner to record it. Not built or installed by
+  `install.sh`; `hp-scan` is not (and must not be) setuid.
+- **`hp-laserjet-doctor` self-test command (`hp-laserjet-doctor.sh`).** A
+  standalone diagnostic that mirrors the watcher's own detection and prints a
+  PASS/FAIL summary per check: dependencies (ghostscript / libusb / poppler /
+  installed `fwload` incl. its setuid bit / the `foo2zjs`+`foo2xqx` converters),
+  printer detection over `ioreg` with the matched model row, a firmware-blob
+  dry-run, and a dry test-page conversion (`gs` → converter, byte count only —
+  no USB writes). With no flags it is entirely read-only; `--push` uploads the
+  firmware over USB and `--print` runs the full pipeline and prints a test page.
+  Exits non-zero on any failure (including no supported printer). Installed onto
+  `PATH` as `hp-laserjet-doctor` by `install.sh` (removed by `uninstall.sh`).
+- **Optional CUPS spooling backend (`cups-backend/`).** An independent, opt-in
+  CUPS backend that makes the printer appear in **System Settings › Printers**
+  and be **AirPrint-shareable** to iPhones/iPads. It **never touches USB and
+  never execs the driver** — it only writes the job as `job-<ts>.pdf` into
+  `~/HP-LaserJet-spool/` (the same intake the sandboxed PDF Service uses),
+  converting PS→PDF via `pstopdf`/Ghostscript and refusing anything it cannot
+  turn into a PDF. All real work still happens only in the unsandboxed watcher,
+  so it does not reintroduce the "CUPS can't drive this printer" problem.
+  Installed separately (`sudo cups-backend/install-cups-backend.sh`); not part
+  of `install.sh`. Logs to `~/HP-LaserJet-spool/backend.log`.
+- **Menu-bar print manager (`menubar/`).** The optional native `NSStatusItem`
+  app gained live **per-job progress**, **queue actions** (cancel a job,
+  reprint-last), and a **toner / page-count badge** parsed from the PJL status
+  lines in the watcher log. Still a standalone single-file Swift executable
+  (built with `swiftc`, no Xcode project), still never touches USB, and still
+  not wired into `install.sh`.
+- **More paper sizes plus scale and margin controls.** `hp-laserjet-watcher.sh`
+  now recognises `legal`, `a5`, `executive`, `com10` (#10 envelope) and `dl`
+  (DL envelope) in addition to `letter`/`a4`, each mapped to the converter's
+  DMPAPER paper code and correct 600-dpi raster grid, plus `SCALE` (percent) and
+  `MARGIN` (points) applied during Ghostscript rasterisation. Settable via the
+  config file and per-job `.opts` sidecar. **The `letter`/`a4` defaults are
+  byte-for-byte identical to before.** The new `legal`, `a5`, `executive`,
+  `com10` and `dl` sizes are **UNTESTED on hardware** — the codes and grids
+  match the converters' tables but have not been verified on a real printer.
+  Documented in `docs/CONFIG.md`.
+- **Homebrew one-line install and public-tap documentation.** `HOMEBREW.md` and
+  `README.md` now document a single copy-paste
+  `brew tap … && brew install … && hp-laserjet-install` line, and spell out the
+  requirement that the `homebrew-hp-laserjet` tap repo be **public** (push-to-
+  create leaves it private, which breaks `brew tap` over HTTPS).
+
+## [0.1] - 2026-07-20
 
 ### Changed
 - **Renamed the p1102-specific identifiers to generic `hp-laserjet` names**, now
@@ -188,5 +242,6 @@ First public release.
   software.
 - Page sizes other than A4 / US Letter fall back to Letter.
 
-[Unreleased]: https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/compare/v1.0.0...main
+[0.2.0]: https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/compare/v0.1...v0.2.0
+[0.1]: https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/tags/v0.1
 [1.0.0]: https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/tags/v1.0.0

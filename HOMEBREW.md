@@ -87,15 +87,15 @@ here).
 1. **Tag the release** in this project repo and push the tag:
 
    ```bash
-   git tag v0.1
-   git push origin v0.1
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 
 2. **Update `url`** in the formula to point at that tag's source tarball. GitLab
    serves a source tarball for any tag at:
 
    ```
-   https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v0.1/hp-laserjet-mac-driver-v0.1.tar.gz
+   https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v0.2.0/hp-laserjet-mac-driver-v0.2.0.tar.gz
    ```
 
    (No explicit `version` line is needed — `brew` scans it from the URL.)
@@ -104,7 +104,7 @@ here).
 
    ```bash
    curl -fsSL -o /tmp/hpljd.tar.gz \
-     "https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v0.1/hp-laserjet-mac-driver-v0.1.tar.gz"
+     "https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v0.2.0/hp-laserjet-mac-driver-v0.2.0.tar.gz"
    shasum -a 256 /tmp/hpljd.tar.gz
    ```
 

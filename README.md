@@ -168,6 +168,10 @@ are best-effort UX and never change whether or how a job prints.
   unrecognised still falls back to Letter. `SCALE` (percent) and `MARGIN`
   (points) further adjust the page during rasterisation. See
   [`docs/CONFIG.md`](docs/CONFIG.md).
+  **`letter` and `a4` are hardware-verified; `legal`, `a5`, `executive`,
+  `com10` and `dl` are not yet tested on real hardware** — their paper codes and
+  grids match the converters' tables but are unproven, so treat them as
+  experimental and report results.
 - **Hardware-tested: P1102 and M1005 MFP.** Other models use the same mechanism
   (ZjStream via `foo2zjs`, or XQX via `foo2xqx`) and *should* work; the
   `model_row` table in `hp-laserjet-watcher.sh` (USB PID → driver + firmware +
@@ -221,7 +225,39 @@ open the spool folder, view the log, and clear the spool. It is a standalone
 single-file Swift executable (built with `swiftc`, no Xcode project) and never
 touches USB — all printing stays in the watcher. See
 [`menubar/README.md`](menubar/README.md) for build, run and launch-at-login
-instructions.
+instructions. It shows live per-job progress, a toner / page-count badge (read
+from the PJL status lines in the log), and queue actions (cancel a job,
+reprint-last), in addition to online/offline status and the spool actions.
+
+## System Settings & AirPrint (optional CUPS backend)
+
+An optional CUPS *spooling* backend in [`cups-backend/`](cups-backend/) makes
+the printer appear in **System Settings › Printers** and lets you
+**AirPrint-share** it to iPhones and iPads on your network. It is completely
+independent of the core driver — if you never install it, nothing changes.
+
+Crucially it **never touches USB and never execs the driver**: it only writes
+the incoming job as `job-<ts>.pdf` into `~/HP-LaserJet-spool/` — the same intake
+the PDF Service uses — so the real work still happens only in the unsandboxed
+watcher. That is why it does *not* reintroduce the "CUPS can't drive this
+printer" problem. Install it separately:
+
+```bash
+sudo cups-backend/install-cups-backend.sh
+```
+
+See [`cups-backend/README.md`](cups-backend/README.md) for the queue name,
+AirPrint sharing steps, and uninstall.
+
+## Scanner (M1005 MFP) — experimental scaffolding
+
+[`scanner/`](scanner/) holds **scaffolding only — there is no working scan yet.**
+It contains a libusb probe skeleton (`hp-scan.c`) that opens the M1005's
+vendor-specific scan interface and dumps its endpoint descriptors, plus protocol
+notes. The actual scan command/data handshake is not implemented: it needs a USB
+capture (or a port of SANE's `hpaio`). `scanner/PROTOCOL.md` is the template a
+hardware owner can use to record that capture. It is not built or installed by
+`install.sh`. See [`scanner/README.md`](scanner/README.md).
 
 ## Self-test / troubleshooting
 
