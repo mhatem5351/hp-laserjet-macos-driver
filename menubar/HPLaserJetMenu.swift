@@ -1,15 +1,18 @@
-// HPLaserJetMenu.swift — menu-bar status app for hp-laserjet-mac-driver
+// HPLaserJetMenu.swift — menu-bar print manager for hp-laserjet-mac-driver
 //
-// A tiny NSStatusItem utility that surfaces the state of the host-based HP
-// LaserJet print pipeline: whether a supported printer is on the USB bus, how
-// many jobs are queued in the spool, and one-click access to retrigger the
-// watcher, open the spool/log, and clear the queue.
+// A small NSStatusItem utility that surfaces — and lets you manage — the state
+// of the host-based HP LaserJet print pipeline: whether a supported printer is
+// on the USB bus, what job (if any) is printing right now, the queued jobs and
+// per-job cancel/reprint actions, and the printer's toner / page-count status.
 //
 // It is intentionally standalone: it shells out to `ioreg` for USB detection
 // (matching the watcher, which uses ioreg because system_profiler returns
-// nothing on macOS Tahoe) and reads the spool directory directly. It never
-// touches USB, execs the drivers, or writes anything but a transient nudge
-// file — all real work stays in the unsandboxed launchd watcher.
+// nothing on macOS Tahoe) and reads the spool directory + watcher.log directly.
+// It NEVER touches USB, execs the drivers, or claims a USB interface — all real
+// work stays in the unsandboxed launchd watcher. The only things it writes are
+// spool files: a transient nudge, a job deletion (cancel), or an atomic
+// .incoming-*→job-*.pdf copy (reprint) — exactly the moves the PDF Service and
+// watcher already make.
 //
 // Build (standalone, no Xcode project):
 //   swiftc -O menubar/HPLaserJetMenu.swift -o /usr/local/share/foo2zjs/hp-laserjet-menu
@@ -60,6 +63,12 @@ private let supportedProductHex: [Int] = [
 private let spoolDirName = "HP-LaserJet-spool"
 private let logFileName = "watcher.log"
 
+/// How often we poll the spool + log. 2 s is responsive without being busy.
+private let refreshInterval: TimeInterval = 2.0
+
+/// Cap the log tail we read so a large watcher.log never costs much.
+private let logTailBytes = 64 * 1024
+
 // MARK: - Model
 
 /// The result of a USB detection pass.
@@ -67,6 +76,26 @@ private struct PrinterStatus {
     let online: Bool
     /// USB "USB Product Name" string when the device exposes one.
     let modelName: String?
+}
+
+/// A snapshot of what the watcher is doing, derived from the spool + log.
+private struct PipelineState {
+    /// A job the watcher appears to be working on right now (best-effort).
+    let activeJob: String?
+    /// A short human phase string for the active job ("rasterising", "sending", …).
+    let activePhase: String?
+    /// Queued job files (basenames), oldest first.
+    let queued: [String]
+    /// True if a partial .incoming-* file is present (spooling in progress).
+    let incoming: Bool
+    /// Basename of the most recently completed job, from the log (may be gone from disk).
+    let lastCompleted: String?
+    /// Printer page count, if the log carried a PAGECOUNT status-kv line.
+    let pageCount: Int?
+    /// True when the latest status indicates low/empty toner.
+    let tonerLow: Bool
+    /// Latest human-readable DISPLAY/status text, if any.
+    let displayText: String?
 }
 
 // MARK: - App logic
@@ -77,7 +106,19 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     // Menu items we mutate on refresh.
     private let printerItem = NSMenuItem(title: "Printer: …", action: nil, keyEquivalent: "")
-    private let queueItem = NSMenuItem(title: "Queue: …", action: nil, keyEquivalent: "")
+    private let activeItem = NSMenuItem(title: "Idle", action: nil, keyEquivalent: "")
+    private let statusLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let queueHeaderItem = NSMenuItem(title: "Queue: …", action: nil, keyEquivalent: "")
+    /// Submenu holding one entry per queued job (with a Cancel action).
+    private let queueSubmenu = NSMenu()
+    private let reprintItem = NSMenuItem(title: "Reprint Last", action: nil, keyEquivalent: "")
+
+    /// Cached template printer icon and its low-toner (badged) variant.
+    private var baseIcon: NSImage?
+    private var badgedIcon: NSImage?
+
+    /// Path to the last completed job we can still reprint (an archived copy).
+    private var reprintablePath: URL?
 
     private var spoolURL: URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -88,24 +129,30 @@ final class AppController: NSObject, NSApplicationDelegate {
         spoolURL.appendingPathComponent(logFileName, isDirectory: false)
     }
 
+    /// Where we keep a copy of each completed job so "Reprint Last" has something
+    /// to re-drop. The watcher deletes job-*.pdf after printing, so we snapshot
+    /// the newest job we see on disk into here before it disappears.
+    private var archiveURL: URL {
+        spoolURL.appendingPathComponent(".menubar-last.pdf", isDirectory: false)
+    }
+
     // MARK: NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem.button {
-            let icon = NSImage(systemSymbolName: "printer", accessibilityDescription: "HP LaserJet")
-            icon?.isTemplate = true
-            button.image = icon
-            // Fallback for very old systems lacking the SF Symbol.
-            if button.image == nil {
-                button.title = "HP"
-            }
-        }
+        baseIcon = NSImage(systemSymbolName: "printer", accessibilityDescription: "HP LaserJet")
+        baseIcon?.isTemplate = true
+        badgedIcon = NSImage(systemSymbolName: "printer.fill.and.paper.fill",
+                             accessibilityDescription: "HP LaserJet — low toner")
+            ?? NSImage(systemSymbolName: "exclamationmark.triangle",
+                       accessibilityDescription: "HP LaserJet — low toner")
+        badgedIcon?.isTemplate = true
+        applyIcon(tonerLow: false)
 
         buildMenu()
         refresh()
 
-        timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
     }
@@ -121,9 +168,23 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.autoenablesItems = false
 
         printerItem.isEnabled = false
-        queueItem.isEnabled = false
+        activeItem.isEnabled = false
+        statusLineItem.isEnabled = false
+        queueHeaderItem.isEnabled = false
+
         menu.addItem(printerItem)
-        menu.addItem(queueItem)
+        menu.addItem(activeItem)
+        menu.addItem(statusLineItem)
+
+        menu.addItem(.separator())
+
+        // Queue header + a submenu listing each queued job with a cancel action.
+        queueHeaderItem.submenu = queueSubmenu
+        menu.addItem(queueHeaderItem)
+
+        reprintItem.target = self
+        reprintItem.action = #selector(reprintLast)
+        menu.addItem(reprintItem)
 
         menu.addItem(.separator())
 
@@ -148,16 +209,92 @@ final class AppController: NSObject, NSApplicationDelegate {
     // MARK: Refresh
 
     private func refresh() {
-        let status = detectPrinter()
-        if status.online {
-            let label = status.modelName ?? "online"
+        let printer = detectPrinter()
+        if printer.online {
+            let label = printer.modelName ?? "online"
             printerItem.title = "Printer: \(label)"
         } else {
             printerItem.title = "Printer: offline"
         }
 
-        let n = queuedJobCount()
-        queueItem.title = "Queue: \(n) job\(n == 1 ? "" : "s")"
+        // Snapshot the newest queued/printing job so Reprint Last survives the
+        // watcher deleting job-*.pdf on completion.
+        snapshotForReprint()
+
+        let state = readPipelineState()
+
+        // Active job / progress line.
+        if let job = state.activeJob {
+            let phase = state.activePhase.map { " — \($0)" } ?? ""
+            activeItem.title = "Printing: \(prettyJobName(job))\(phase)"
+        } else if state.incoming {
+            activeItem.title = "Spooling a new job…"
+        } else {
+            activeItem.title = "Idle"
+        }
+
+        // Status line: page count and toner, when known.
+        var bits: [String] = []
+        if let pc = state.pageCount { bits.append("\(pc) pages") }
+        if state.tonerLow {
+            bits.append("Toner LOW")
+        } else if let d = state.displayText, !d.isEmpty {
+            bits.append(d)
+        }
+        statusLineItem.title = bits.isEmpty ? "Status: —" : "Status: " + bits.joined(separator: " · ")
+
+        applyIcon(tonerLow: state.tonerLow)
+
+        // Queue header + submenu.
+        let n = state.queued.count
+        queueHeaderItem.title = "Queue: \(n) job\(n == 1 ? "" : "s")"
+        rebuildQueueSubmenu(state.queued)
+
+        // Reprint availability.
+        if let last = reprintablePath, FileManager.default.fileExists(atPath: last.path) {
+            reprintItem.isEnabled = true
+            if let name = state.lastCompleted {
+                reprintItem.title = "Reprint Last (\(prettyJobName(name)))"
+            } else {
+                reprintItem.title = "Reprint Last"
+            }
+        } else {
+            reprintItem.isEnabled = false
+            reprintItem.title = "Reprint Last"
+        }
+    }
+
+    private func rebuildQueueSubmenu(_ queued: [String]) {
+        queueSubmenu.removeAllItems()
+        if queued.isEmpty {
+            let empty = NSMenuItem(title: "(no queued jobs)", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            queueSubmenu.addItem(empty)
+            return
+        }
+        for name in queued {
+            let header = NSMenuItem(title: prettyJobName(name), action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            queueSubmenu.addItem(header)
+
+            let cancel = NSMenuItem(title: "Cancel Job", action: #selector(cancelJob(_:)), keyEquivalent: "")
+            cancel.target = self
+            cancel.representedObject = name
+            cancel.indentationLevel = 1
+            queueSubmenu.addItem(cancel)
+        }
+    }
+
+    // MARK: Icon
+
+    private func applyIcon(tonerLow: Bool) {
+        guard let button = statusItem.button else { return }
+        let img = tonerLow ? (badgedIcon ?? baseIcon) : baseIcon
+        button.image = img
+        button.toolTip = tonerLow ? "HP LaserJet — toner low" : "HP LaserJet"
+        if button.image == nil {
+            button.title = tonerLow ? "HP!" : "HP"
+        }
     }
 
     // MARK: Detection
@@ -177,10 +314,6 @@ final class AppController: NSObject, NSApplicationDelegate {
         var sawProduct = false
         var productName: String?
 
-        // ioreg is a tree; a printer's idVendor / idProduct / USB Product Name
-        // lines are all attributes of the same device node, appearing close
-        // together. We scan for a device node that has both the HP vendor id and
-        // a supported product id, capturing any Product Name we see alongside.
         for raw in lines {
             let line = raw.trimmingCharacters(in: .whitespaces)
 
@@ -191,8 +324,6 @@ final class AppController: NSObject, NSApplicationDelegate {
                 sawProduct = true
             }
             if let name = attributeString(line, key: "USB Product Name") {
-                // Only remember HP-ish names to avoid picking up an unrelated
-                // device node's product string.
                 if name.lowercased().contains("hp") || name.lowercased().contains("laserjet") {
                     productName = name
                 }
@@ -208,7 +339,6 @@ final class AppController: NSObject, NSApplicationDelegate {
         let needle = "\"\(key)\" = "
         guard let range = line.range(of: needle) else { return nil }
         let rest = line[range.upperBound...]
-        // Take the leading digits.
         let digits = rest.prefix { $0.isNumber }
         return Int(digits)
     }
@@ -227,17 +357,206 @@ final class AppController: NSObject, NSApplicationDelegate {
         return runProcess("/usr/sbin/ioreg", ["-p", "IOUSB", "-w0", "-l"])
     }
 
-    // MARK: Spool queries
+    // MARK: Spool + log queries
 
-    private func queuedJobCount() -> Int {
+    /// Read the spool directory and the tail of watcher.log into one snapshot.
+    ///
+    /// The watcher's log is the only progress signal we have — it does not emit
+    /// byte-level progress, so "active" is inferred: a job is being worked on
+    /// when the last "processing <job>" line in the log has no matching
+    /// completion ("fwload exit", "empty conversion") *after* it AND that job
+    /// file (or a .incoming-*) is still present. Otherwise we are idle.
+    private func readPipelineState() -> PipelineState {
         let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(atPath: spoolURL.path) else {
-            return 0
+        let entries = (try? fm.contentsOfDirectory(atPath: spoolURL.path)) ?? []
+
+        let queued = entries
+            .filter { $0.hasPrefix("job-") && $0.hasSuffix(".pdf") }
+            .sorted()
+        let incoming = entries.contains { $0.hasPrefix(".incoming-") }
+
+        let tail = readLogTail()
+        let lines = tail.components(separatedBy: .newlines)
+
+        // Walk the log to find the last "processing" and whether it completed.
+        var lastProcessing: String?
+        var completedAfterProcessing = false
+        var lastPhase: String?
+        var lastCompleted: String?
+        var pageCount: Int?
+        var tonerLow = false
+        var displayText: String?
+
+        for line in lines {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if let p = parseProcessing(t) {
+                lastProcessing = p
+                completedAfterProcessing = false
+                lastPhase = "starting"
+            } else if lastProcessing != nil {
+                if t.hasPrefix("page height=") {
+                    lastPhase = "rasterising"
+                } else if t.hasPrefix("raster ") && t.hasSuffix("bytes") {
+                    lastPhase = "sending"
+                } else if t.hasPrefix("fwload exit") {
+                    completedAfterProcessing = true
+                    lastCompleted = lastProcessing
+                } else if t.hasPrefix("empty conversion") {
+                    completedAfterProcessing = true
+                    lastCompleted = lastProcessing
+                }
+            }
+
+            // Status parsing runs regardless of job framing; take the latest.
+            if t.hasPrefix("status-kv:") || t.hasPrefix("status-line:") {
+                let payload = String(t.drop(while: { $0 != ":" }).dropFirst())
+                    .trimmingCharacters(in: .whitespaces)
+                if let pc = extractPageCount(payload) { pageCount = pc }
+                if let low = extractTonerLow(payload) { tonerLow = low }
+                if let disp = extractDisplay(payload) { displayText = disp }
+            }
         }
-        return entries.filter { $0.hasPrefix("job-") && $0.hasSuffix(".pdf") }.count
+
+        // A job is active if the last "processing" line was not followed by a
+        // completion marker AND that job (or an .incoming) is still on disk.
+        var activeJob: String?
+        var activePhase: String?
+        if let proc = lastProcessing, !completedAfterProcessing {
+            let base = (proc as NSString).lastPathComponent
+            if queued.contains(base) || incoming {
+                activeJob = base
+                activePhase = lastPhase
+            }
+        }
+
+        return PipelineState(activeJob: activeJob,
+                             activePhase: activePhase,
+                             queued: queued,
+                             incoming: incoming,
+                             lastCompleted: lastCompleted.map { ($0 as NSString).lastPathComponent },
+                             pageCount: pageCount,
+                             tonerLow: tonerLow,
+                             displayText: displayText)
+    }
+
+    /// Match a `processing /path/job-<ts>.pdf` line, returning the path.
+    private func parseProcessing(_ line: String) -> String? {
+        guard line.hasPrefix("processing ") else { return nil }
+        return String(line.dropFirst("processing ".count)).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Pull a page count out of a PJL status payload (e.g. `PAGECOUNT=1234`).
+    private func extractPageCount(_ payload: String) -> Int? {
+        let upper = payload.uppercased()
+        guard let r = upper.range(of: "PAGECOUNT") else { return nil }
+        let rest = upper[r.upperBound...].drop { !$0.isNumber }
+        let digits = rest.prefix { $0.isNumber }
+        return digits.isEmpty ? nil : Int(digits)
+    }
+
+    /// Decide if a PJL status payload indicates low/empty toner.
+    /// Returns nil when the payload says nothing about toner (leave prior value).
+    private func extractTonerLow(_ payload: String) -> Bool? {
+        let upper = payload.uppercased()
+        guard upper.contains("TONER") || upper.contains("CARTRIDGE") || upper.contains("SUPPLY") else {
+            return nil
+        }
+        // Common PJL wording: "TONER LOW", "TONER EMPTY", "REPLACE ... CARTRIDGE",
+        // "SUPPLY LOW". Treat any of these as low.
+        for marker in ["LOW", "EMPTY", "REPLACE", "OUT", "DEPLETED"] {
+            if upper.contains(marker) { return true }
+        }
+        return false
+    }
+
+    /// Pull a human-readable DISPLAY string (e.g. `DISPLAY="Ready"`).
+    private func extractDisplay(_ payload: String) -> String? {
+        guard let r = payload.range(of: "DISPLAY", options: .caseInsensitive) else { return nil }
+        var rest = String(payload[r.upperBound...])
+        rest = rest.trimmingCharacters(in: CharacterSet(charactersIn: " =\""))
+        if let q = rest.firstIndex(of: "\"") { rest = String(rest[..<q]) }
+        rest = rest.trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty ? nil : rest
+    }
+
+    /// Read the last `logTailBytes` of watcher.log as UTF-8 (lossy).
+    private func readLogTail() -> String {
+        guard let handle = try? FileHandle(forReadingFrom: logURL) else { return "" }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let start = size > UInt64(logTailBytes) ? size - UInt64(logTailBytes) : 0
+        try? handle.seek(toOffset: start)
+        let data = (try? handle.readToEnd()) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Snapshot the newest job-*.pdf currently on disk into .menubar-last.pdf so
+    /// Reprint Last has a source even after the watcher deletes the original.
+    private func snapshotForReprint() {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: spoolURL.path) else { return }
+        let jobs = entries.filter { $0.hasPrefix("job-") && $0.hasSuffix(".pdf") }.sorted()
+        guard let newest = jobs.last else {
+            // Nothing queued now; keep any prior archive and just point at it.
+            if fm.fileExists(atPath: archiveURL.path) { reprintablePath = archiveURL }
+            return
+        }
+        let src = spoolURL.appendingPathComponent(newest)
+        // Copy over the archive (cheap; PDFs are small). Ignore failures — this
+        // is best-effort convenience, not correctness.
+        try? fm.removeItem(at: archiveURL)
+        try? fm.copyItem(at: src, to: archiveURL)
+        reprintablePath = archiveURL
+    }
+
+    /// job-1721600000.pdf → "job-1721600000".
+    private func prettyJobName(_ base: String) -> String {
+        var s = base
+        if s.hasSuffix(".pdf") { s = String(s.dropLast(4)) }
+        return s
     }
 
     // MARK: Actions
+
+    @objc private func cancelJob(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        let target = spoolURL.appendingPathComponent(name)
+        // "Cancel" = remove the queued job file (and its sidecar, if present).
+        // If the watcher is mid-conversion of this job it holds its own gs/conv
+        // pipeline on a temp file, so deleting the spooled PDF only stops future
+        // handling — matching Clear Spool semantics.
+        let fm = FileManager.default
+        try? fm.removeItem(at: target)
+        let opts = spoolURL.appendingPathComponent((name as NSString).deletingPathExtension + ".opts")
+        try? fm.removeItem(at: opts)
+        refresh()
+    }
+
+    @objc private func reprintLast() {
+        guard let src = reprintablePath,
+              FileManager.default.fileExists(atPath: src.path) else {
+            warn("No completed job available to reprint yet.")
+            return
+        }
+        // Re-drop a fresh job using the same atomic pattern as the PDF Service:
+        // write .incoming-* then rename to job-<ts>.pdf so the watcher never sees
+        // a partial file.
+        ensureSpoolExists()
+        let ts = String(Int(Date().timeIntervalSince1970))
+        let incoming = spoolURL.appendingPathComponent(".incoming-reprint-\(ts).pdf")
+        let final = spoolURL.appendingPathComponent("job-\(ts).pdf")
+        let fm = FileManager.default
+        do {
+            try? fm.removeItem(at: incoming)
+            try fm.copyItem(at: src, to: incoming)
+            try fm.moveItem(at: incoming, to: final)
+        } catch {
+            try? fm.removeItem(at: incoming)
+            warn("Could not queue reprint: \(error.localizedDescription)")
+            return
+        }
+        refresh()
+    }
 
     @objc private func retriggerWatcher() {
         // launchd's WatchPaths fires on any change to the spool directory's
