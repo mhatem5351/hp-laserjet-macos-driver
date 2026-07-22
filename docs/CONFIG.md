@@ -36,7 +36,9 @@ EOF
 
 | Key              | Values              | Default | Meaning                                                        |
 |------------------|---------------------|---------|----------------------------------------------------------------|
-| `PAPER`          | `letter` \| `a4` \| `auto` | `auto`  | Paper size. `auto` detects A4 vs US Letter from the PDF page height (current behaviour). |
+| `PAPER`          | `auto` \| `letter` \| `a4` \| `legal` \| `a5` \| `executive` \| `com10` \| `dl` | `auto`  | Paper size. `auto` detects A4 vs US Letter from the PDF page height (current behaviour); any other value forces the size and raster grid. See [Paper sizes](#paper-sizes). |
+| `SCALE`          | positive integer percent, or unset | unset | Scale the page during rasterisation (e.g. `90` = 90 %). Unset = no scaling (identical to prior behaviour). See [Scale and margin](#scale-and-margin). |
+| `MARGIN`         | non-negative integer points, or unset | unset | Uniform blank border inset, in points (72 pt = 1 in), applied during rasterisation. Unset/`0` = none (identical to prior behaviour). See [Scale and margin](#scale-and-margin). |
 | `DENSITY`        | `1`–`5`, or unset   | unset   | Print density. When unset, no override is added and the driver default is used. See [Print quality / density](#print-quality--density). |
 | `ECONOMODE`      | `on` \| `off`, or unset | unset | Toner-save / draft mode. `off`/unset adds no flag. See [Print quality / density](#print-quality--density). |
 | `DEFAULT_COPIES` | integer ≥ 1         | `1`     | Default number of copies per job when a job does not specify its own. |
@@ -45,16 +47,18 @@ EOF
 | `NOTIFY`         | `all` \| `errors` \| `none` | `all` | macOS notifications on job completion (see below). |
 | `PRINTER`        | USB PID or name substring, or unset | unset | Which printer to use when **several** supported printers are attached. See "Selecting a printer" below. Ignored when only one supported printer is present. |
 
-An unrecognised or empty `PAPER` value falls back to `auto`; an empty
-`DEFAULT_COPIES` falls back to `1`; an unrecognised `DEFAULT_DUPLEX` falls back
-to `none`; a non-integer `DEFAULT_NUP` falls back to `1`; an unrecognised or
-empty `NOTIFY` falls back to `all`.
+An unrecognised or empty `PAPER` value falls back to `auto`; a non-positive or
+non-integer `SCALE` is ignored (no scaling); a negative or non-integer `MARGIN`
+is ignored (no inset); an empty `DEFAULT_COPIES` falls back to `1`; an
+unrecognised `DEFAULT_DUPLEX` falls back to `none`; a non-integer `DEFAULT_NUP`
+falls back to `1`; an unrecognised or empty `NOTIFY` falls back to `all`.
 
-> **Note:** `PAPER=auto`, `DENSITY` unset, `ECONOMODE` unset, `DEFAULT_COPIES=1`,
-> `DEFAULT_DUPLEX=none`, `DEFAULT_NUP=1`, `NOTIFY=all` and `PRINTER` unset (the
-> defaults) reproduce today's behaviour exactly — the converter flag string is
-> byte-for-byte identical to running with no config, and notifications are
-> informational only.
+> **Note:** `PAPER=auto`, `SCALE` unset, `MARGIN` unset, `DENSITY` unset,
+> `ECONOMODE` unset, `DEFAULT_COPIES=1`, `DEFAULT_DUPLEX=none`, `DEFAULT_NUP=1`,
+> `NOTIFY=all` and `PRINTER` unset (the defaults) reproduce today's behaviour
+> exactly — the converter flag string is byte-for-byte identical to running with
+> no config, the Ghostscript command line is unchanged (no page transform is
+> injected), and notifications are informational only.
 
 ### `NOTIFY` — completion notifications
 
@@ -141,6 +145,9 @@ that take precedence over the user config file for that one job. Recognised keys
 | `NUP`       | `NUP=2`         | Pages per sheet (N-up).                             |
 | `DENSITY`   | `DENSITY=3`     | Print-density override (`1`–`5`) for this job.      |
 | `ECONOMODE` | `ECONOMODE=on`  | Toner-save / draft mode for this job.               |
+| `PAPER`     | `PAPER=legal`   | Paper size for this job (`auto`\|`letter`\|`a4`\|`legal`\|`a5`\|`executive`\|`com10`\|`dl`). |
+| `SCALE`     | `SCALE=90`      | Scale the page to N % during rasterisation.         |
+| `MARGIN`    | `MARGIN=18`     | Uniform blank border inset in points for this job.  |
 
 `read_job_opts` parses the sidecar as a small `KEY=value` allow-list — it is
 **not** sourced, so a stray line cannot run code or clobber other variables.
@@ -148,11 +155,72 @@ For each job it first resets the per-job variables to their config/default
 values, then applies any recognised keys from the sidecar; a sidecar value
 therefore overrides the user config for that one job. Jobs without a `.opts`
 file are wholly unaffected. `PRINTER` (routing, see "Selecting a printer"),
-print-quality keys (`DENSITY`, `ECONOMODE`) and `COPIES` / `DUPLEX` / `NUP` are
-all handled; unknown keys are ignored so multiple features can share one
-sidecar.
+print-quality keys (`DENSITY`, `ECONOMODE`), page-geometry keys (`PAPER`,
+`SCALE`, `MARGIN`) and `COPIES` / `DUPLEX` / `NUP` are all handled; unknown keys
+are ignored so multiple features can share one sidecar.
+
+Every key in the user-config table above is also **per-job-sidecar-capable** —
+`PAPER`, `SCALE` and `MARGIN` included — so a `.opts` value overrides the config
+default for that one job.
 
 The `.opts` sidecar is removed together with its PDF once the job is processed.
+
+## Paper sizes
+
+`PAPER=auto` (the default) keeps the original behaviour: the watcher reads the
+PDF's page height with `pdfinfo` and picks **A4** (height > 820 pt, i.e. 842 pt)
+or **US Letter** (everything else). Nothing else is auto-detected.
+
+Set `PAPER` explicitly (in the config file or a per-job `.opts`) to force a size
+regardless of the PDF. Each name maps to the printer's `-p` **paper code** and a
+matching raster grid `-g<W>x<H>`. The paper codes are the converters' own
+`DMPAPER_*` numbering (`hbpl.h` / `hiperc.h` in `vendor/foo2zjs-src.tar.gz`,
+identical in both `foo2zjs` and `foo2xqx`, and echoed in each tool's
+`-p` usage line):
+
+| `PAPER`     | `-p` code | `DMPAPER_*`     | Size            | Base 600-dpi grid (W×H) |
+|-------------|-----------|-----------------|-----------------|--------------------------|
+| `letter`    | `1`       | `LETTER`        | 8.5 × 11 in     | 5100 × 6600 |
+| `legal`     | `5`       | `LEGAL`         | 8.5 × 14 in     | 5100 × 8400 |
+| `executive` | `7`       | `EXECUTIVE`     | 7.25 × 10.5 in  | 4350 × 6300 |
+| `a4`        | `9`       | `A4`            | 210 × 297 mm    | 4960 × 7016 |
+| `a5`        | `11`      | `A5`            | 148 × 210 mm    | 3500 × 4960 |
+| `com10`     | `20`      | `ENV_10`        | #10 env, 4.125 × 9.5 in | 2475 × 5700 |
+| `dl`        | `27`      | `ENV_DL`        | DL env, 110 × 220 mm | 2600 × 5200 |
+
+The grid is the page size in 600-dpi pixels (inches × 600). For the 1200 × 600
+models (`XSCALE=2`) the **width** is doubled by `grid_for()` before it reaches
+Ghostscript and the converter, exactly as for the pre-existing Letter/A4 grids;
+the height is unchanged. `a5`/`dl` widths are rounded to the same round-number
+convention as the existing `a4` grid (4960 vs the exact 4961).
+
+The PDF is fitted into that grid with Ghostscript's `-dFIXEDMEDIA -dPDFFitPage`
+(as before), so a document whose page differs from the selected paper is scaled
+to fit rather than clipped. An unknown or empty `PAPER` value falls back to
+`auto`, which in turn falls back to Letter — so behaviour for anything the
+watcher does not recognise is unchanged.
+
+## Scale and margin
+
+`SCALE` and `MARGIN` are applied **only** in the Ghostscript rasterisation step,
+via a small PostScript `/BeginPage` prologue injected with `-c … -f`. When both
+are unset (the default) **no** prologue is injected and the `gs` command line is
+byte-for-byte identical to the pre-feature invocation — the raster converter and
+its flags are untouched either way.
+
+- **`SCALE=<percent>`** scales the page about its centre (e.g. `SCALE=90`
+  prints at 90 %, `SCALE=110` enlarges). Only a positive integer is accepted;
+  `0`, a non-integer, or `auto`/empty is logged and ignored (no scaling).
+- **`MARGIN=<points>`** insets a uniform blank border of N points (72 pt = 1
+  inch) on all four sides. The content is scaled down uniformly (aspect
+  preserved) and re-centred so it fits inside the reduced area rather than being
+  clipped. `0`, a negative value, a non-integer, or empty is ignored (no inset).
+
+The two compose: the net scale is `SCALE/100 × (paper − 2·MARGIN)/paper` (taking
+the smaller of the width/height insets so the aspect ratio is preserved), and
+the content is re-centred on the page. Because these run entirely inside
+Ghostscript they never touch the converter's `-r`/`-g`/`-p` geometry, so they
+cannot desync the paper grid.
 
 ## Print quality / density
 

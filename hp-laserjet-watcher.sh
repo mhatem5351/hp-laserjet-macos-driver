@@ -30,7 +30,13 @@ VID=0x03f0   # HP — same vendor for the whole family
 # the user controls. All keys are optional; if the file is absent the defaults
 # below are used and behaviour is byte-for-byte identical to having no config.
 #
-#   PAPER=letter|a4|auto     paper size (default auto = detect from the PDF)
+#   PAPER=auto|letter|a4|legal|a5|executive|com10|dl
+#                            paper size (default auto = detect from the PDF).
+#                            An explicit value forces the size + raster grid.
+#   SCALE=<percent>          scale the page during rasterisation (gs); unset =
+#                            no scaling (default; identical to prior behaviour).
+#   MARGIN=<points>          uniform blank inset applied during rasterisation
+#                            (gs); unset = none (default; identical to prior).
 #   DENSITY=<1-5>            print density (foo2* -T); unset = driver default
 #   ECONOMODE=on|off         toner-save/draft (foo2* -t); unset/off = no flag
 #   DEFAULT_COPIES=<n>       default copy count for a job (default 1)
@@ -48,6 +54,8 @@ CONFIG_FILE="${HP_LASERJET_CONFIG:-$HOME/.config/hp-laserjet/config}"
 
 # Config-backed settings, with safe defaults. Populated by load_config().
 PAPER=auto
+SCALE=""
+MARGIN=""
 DENSITY=""
 ECONOMODE=""
 DEFAULT_COPIES=1
@@ -62,7 +70,10 @@ load_config() {
     # shellcheck source=/dev/null
     . "$CONFIG_FILE"
     # Re-assert safe defaults for anything the file left blank or set oddly.
-    case "$PAPER" in letter|a4|auto) ;; *) PAPER=auto ;; esac
+    case "$PAPER" in
+        auto|letter|a4|legal|a5|executive|com10|dl) ;;
+        *) PAPER=auto ;;
+    esac
     [ -n "$DEFAULT_COPIES" ] || DEFAULT_COPIES=1
     case "$DEFAULT_DUPLEX" in none|long|short) ;; *) DEFAULT_DUPLEX=none ;; esac
     [ -n "$DEFAULT_NUP" ] || DEFAULT_NUP=1
@@ -357,11 +368,41 @@ if [ ! -f "$FW" ]; then
     exit 1
 fi
 
-# Paper grid, in pixels, for this model's RES. Base (600 dpi) grid is:
-#   US Letter  5100 x 6600     A4  4960 x 7016
-# The across dimension is multiplied by XSCALE for the 1200x600 models.
+# Paper grid, in pixels, for this model's RES. The base grid is the page size
+# in 600-dpi pixels (inches * 600); the across dimension is multiplied by
+# XSCALE for the 1200x600 models (which expect doubled pixels across).
 grid_for() {   # $1 = base-width  $2 = height
     echo "$(( $1 * XSCALE ))x$2"
+}
+
+# paper_spec() maps a paper name to "<PCODE> <base_width_px> <height_px>", where
+# PCODE is the foo2zjs/foo2xqx -p paper code (DMPAPER_* in hbpl.h / hiperc.h,
+# identical in both converters) and the pixel dims are the 600-dpi base grid
+# (inches * 600; the across dim is later * XSCALE by grid_for). Codes and sizes:
+#
+#   name       PCODE  DMPAPER_*        size            600dpi base grid (WxH)
+#   letter       1    LETTER           8.5 x 11 in      5100 x 6600
+#   legal        5    LEGAL            8.5 x 14 in      5100 x 8400
+#   executive    7    EXECUTIVE        7.25 x 10.5 in   4350 x 6300
+#   a4           9    A4               210 x 297 mm     4960 x 7016
+#   a5          11    A5               148 x 210 mm     3500 x 4960
+#   com10       20    ENV_10           4.125 x 9.5 in   2475 x 5700
+#   dl          27    ENV_DL           110 x 220 mm     2600 x 5200
+#
+# a5/dl dims are rounded to the same round-number convention as the pre-existing
+# letter/a4 rows (A4's 4960 vs exact 4961). Unknown names => "" (caller falls
+# back to Letter, preserving current behaviour).
+paper_spec() {   # $1 = paper name  ->  "PCODE BASEW HEIGHT" on stdout
+    case "$1" in
+        letter)    echo "1 5100 6600" ;;
+        legal)     echo "5 5100 8400" ;;
+        executive) echo "7 4350 6300" ;;
+        a4)        echo "9 4960 7016" ;;
+        a5)        echo "11 3500 4960" ;;
+        com10)     echo "20 2475 5700" ;;
+        dl)        echo "27 2600 5200" ;;
+        *)         echo "" ;;
+    esac
 }
 
 # Map a friendly duplex name to the converter's numeric -d code. Both foo2zjs
@@ -468,13 +509,17 @@ job_extra_flags() {
 #   DUPLEX=long    two-sided: none|long|short    (simplex units: WARNED)
 #   NUP=2          N pages per sheet             (converters lack N-up; WARNED)
 #   DENSITY=3      per-job print-density override
+#   PAPER=legal    per-job paper size            (auto|letter|a4|legal|a5|...)
+#   SCALE=90       per-job page scale (percent)  (gs rasterisation)
+#   MARGIN=18      per-job blank inset (points)  (gs rasterisation)
 #
 # Each iteration first resets the per-job option vars to their config/default
 # values so state never leaks between jobs, then — if a sidecar exists — reads
 # a small allow-list of KEY=value lines to override them for this job only.
 # Jobs with no .opts file are wholly unaffected (the reset alone runs). A single
 # injection-safe loop (the sidecar is NOT sourced) handles every feature's keys:
-# COPIES, DUPLEX, NUP (F1), DENSITY, ECONOMODE (F8), PRINTER (multi-printer).
+# COPIES, DUPLEX, NUP (F1), DENSITY, ECONOMODE (F8), PRINTER (multi-printer),
+# PAPER/SCALE/MARGIN (paper-sizes).
 read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     COPIES="$DEFAULT_COPIES"
     JOB_DENSITY="$DENSITY"        # config DENSITY is the per-job default...
@@ -482,6 +527,9 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     JOB_DUPLEX="$DEFAULT_DUPLEX"
     JOB_NUP="$DEFAULT_NUP"
     JOB_PRINTER=""                # per-job printer routing (multi-printer)
+    JOB_PAPER="$PAPER"            # config PAPER is the per-job default...
+    JOB_SCALE="$SCALE"            # ...and the sidecar may override each below.
+    JOB_MARGIN="$MARGIN"
 
     local sidecar="$1" line key val
     if [ -f "$sidecar" ]; then
@@ -502,6 +550,9 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
                 DUPLEX)    [ -n "$val" ] && JOB_DUPLEX="$val" ;;
                 NUP)       [ -n "$val" ] && JOB_NUP="$val" ;;
                 PRINTER)   JOB_PRINTER="$val" ;;
+                PAPER)     [ -n "$val" ] && JOB_PAPER="$val" ;;
+                SCALE)     JOB_SCALE="$val" ;;
+                MARGIN)    JOB_MARGIN="$val" ;;
                 *) ;;   # unknown keys ignored so features coexist in one sidecar
             esac
         done < "$sidecar"
@@ -513,6 +564,30 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     case "$JOB_DUPLEX" in none|long|short) ;; *) JOB_DUPLEX=none ;; esac
     case "$JOB_NUP" in ''|*[!0-9]*) JOB_NUP=1 ;; esac
     [ "$JOB_NUP" -ge 1 ] 2>/dev/null || JOB_NUP=1
+
+    # Paper size: unknown/empty falls back to auto (pdfinfo detect), which in
+    # turn falls back to Letter — preserving the original behaviour exactly.
+    case "$JOB_PAPER" in
+        auto|letter|a4|legal|a5|executive|com10|dl) ;;
+        *)
+            [ -n "$JOB_PAPER" ] && \
+                echo "  ignoring PAPER='$JOB_PAPER' (unknown size) -> auto" >> "$LOG"
+            JOB_PAPER=auto ;;
+    esac
+    # SCALE: positive percent only; anything else is ignored (no scaling).
+    case "$JOB_SCALE" in
+        ''|auto) JOB_SCALE="" ;;
+        *[!0-9]*) echo "  ignoring SCALE='$JOB_SCALE' (want positive integer percent)" >> "$LOG"
+                  JOB_SCALE="" ;;
+        0) echo "  ignoring SCALE=0 (want positive integer percent)" >> "$LOG"
+           JOB_SCALE="" ;;
+    esac
+    # MARGIN: non-negative points only; anything else is ignored (no inset).
+    case "$JOB_MARGIN" in
+        ''|0) JOB_MARGIN="" ;;
+        *[!0-9]*) echo "  ignoring MARGIN='$JOB_MARGIN' (want non-negative integer points)" >> "$LOG"
+                  JOB_MARGIN="" ;;
+    esac
 
     # Warn about requests these host-based printers / converters can't fulfil.
     if [ "$JOB_DUPLEX" != none ]; then
@@ -532,8 +607,9 @@ for PDF in "$SPOOL"/job-*.pdf; do
     OPTS="${PDF%.pdf}.opts"
     TMP=$(mktemp /tmp/hp-laserjet.XXXXXX.raster)
 
-    # Load any per-job overrides from the sidecar (falls back to config).
-    # One parser reads all keys: COPIES/DUPLEX/NUP/DENSITY/ECONOMODE/PRINTER.
+    # Load any per-job overrides from the sidecar (falls back to config). One
+    # parser reads all keys: COPIES/DUPLEX/NUP/DENSITY/ECONOMODE/PRINTER/PAPER/
+    # SCALE/MARGIN.
     read_job_opts "$OPTS"
 
     # Per-job printer override: only meaningful when several supported printers
@@ -563,25 +639,90 @@ for PDF in "$SPOOL"/job-*.pdf; do
     # Firmware is idempotent; push before each job in case of a power cycle.
     "$FWLOAD" "$FW" "$VID" "$PID" >>"$LOG" 2>&1 || true
 
-    # Detect page size (height in points): A4 = 842pt, US Letter = 792pt.
-    psize=""
-    [ -n "$PDFINFO" ] && psize=$("$PDFINFO" "$PDF" 2>/dev/null | awk -F'x' '/Page size/{print $2+0}')
-    if [ -n "$psize" ] && [ "${psize%.*}" -gt 820 ]; then
-        PCODE=9;  GDIM=$(grid_for 4960 7016)    # A4       (foo2* paper table)
-    else
-        PCODE=1;  GDIM=$(grid_for 5100 6600)    # US Letter
+    # Paper size. An explicit PAPER (config or sidecar, not "auto") forces the
+    # size + raster grid via paper_spec(); PAPER=auto (the default) keeps the
+    # original pdfinfo auto-detect below, so the unconfigured path is unchanged.
+    PCODE=""; GDIM=""
+    if [ "$JOB_PAPER" != auto ]; then
+        spec=$(paper_spec "$JOB_PAPER")
+        if [ -n "$spec" ]; then
+            # shellcheck disable=SC2086
+            set -- $spec
+            PCODE="$1";  GDIM=$(grid_for "$2" "$3")
+            echo "  paper=$JOB_PAPER (explicit) -> p$PCODE gdim=$GDIM res=$RES" >> "$LOG"
+        fi
+        # A recognised name that somehow yields no spec falls through to auto.
     fi
-    echo "  page height=${psize:-?}pt -> p$PCODE gdim=$GDIM res=$RES" >> "$LOG"
+    if [ -z "$PCODE" ]; then
+        # Auto: detect page size (height in points): A4 = 842pt, Letter = 792pt.
+        psize=""
+        [ -n "$PDFINFO" ] && psize=$("$PDFINFO" "$PDF" 2>/dev/null | awk -F'x' '/Page size/{print $2+0}')
+        if [ -n "$psize" ] && [ "${psize%.*}" -gt 820 ]; then
+            PCODE=9;  GDIM=$(grid_for 4960 7016)    # A4       (foo2* paper table)
+        else
+            PCODE=1;  GDIM=$(grid_for 5100 6600)    # US Letter
+        fi
+        echo "  page height=${psize:-?}pt -> p$PCODE gdim=$GDIM res=$RES" >> "$LOG"
+    fi
 
     # Both gs and the converter share -r/-g/-p; -dPDFFitPage scales into the
     # grid. foo2zjs takes -z (ZjStream compression); foo2xqx has no -z.
     # build_conv_flags() emits the exact flag string for this driver/geometry.
     CONV_FLAGS=$(build_conv_flags)
+
+    # Optional scale/margin, applied ONLY in the Ghostscript rasterisation step
+    # via a PostScript prologue injected with -c ... -f. When neither SCALE nor
+    # MARGIN is set (the default) GS_XFORM stays empty and the gs command line
+    # is byte-identical to the pre-feature invocation below.
+    #
+    # We fit the PDF into the fixed media grid first (-dPDFFitPage), then apply
+    # the transform around the page centre so scaling shrinks/grows about the
+    # middle and a margin insets uniformly. The page box is GDIM pixels at $RES
+    # dpi; scale/translate operate in the device's default (72dpi) user space,
+    # so convert the pixel grid to points: pt = px * 72 / rdpi. For the 1200x600
+    # models the across resolution differs from down, so split rx/ry.
+    GS_XFORM=""
+    if [ -n "$JOB_SCALE" ] || [ -n "$JOB_MARGIN" ]; then
+        rx=${RES%x*}; ry=${RES#*x}
+        gw=${GDIM%x*}; gh=${GDIM#*x}
+        # Page dimensions in PostScript points (1/72"): pt = px * 72 / dpi.
+        pw=$(( gw * 72 / rx )); ph=$(( gh * 72 / ry ))
+        sc="${JOB_SCALE:-100}"; mg="${JOB_MARGIN:-0}"
+        # Compose the transform in the shell (awk, since bash is integer-only)
+        # so the emitted PostScript is just a literal `translate` + `scale`
+        # applied per page via BeginPage. Semantics, relative to the FitPage'd
+        # full-media page (pw x ph pt):
+        #   * MARGIN insets a uniform blank border of `mg` pt on all four sides,
+        #     shrinking the drawable area to (pw-2mg) x (ph-2mg) and scaling the
+        #     content down (uniformly, aspect-preserving) so it still fits.
+        #   * SCALE then multiplies that by sc/100 about the (inset) page centre.
+        # Net: fx = (sc/100) * min((pw-2mg)/pw, (ph-2mg)/ph); content re-centred
+        # via translate = (page - page*fx)/2 per axis (equal to mg when sc=100).
+        read -r sxf txf tyf <<EOF
+$(awk -v pw="$pw" -v ph="$ph" -v sc="$sc" -v mg="$mg" 'BEGIN {
+    mfx = (pw>0)?(pw-2*mg)/pw:1; mfy = (ph>0)?(ph-2*mg)/ph:1;
+    mf = (mfx<mfy)?mfx:mfy; if (mf<0) mf=0;
+    f = (sc/100.0)*mf;
+    printf "%.5f %.3f %.3f\n", f, (pw-pw*f)/2.0, (ph-ph*f)/2.0 }')
+EOF
+        GS_XFORM=$(printf '<< /BeginPage { %s %s translate %s dup scale } >> setpagedevice' \
+            "$txf" "$tyf" "$sxf")
+        echo "  gs transform: scale=${JOB_SCALE:-100}% margin=${JOB_MARGIN:-0}pt -> factor=$sxf (page ${pw}x${ph}pt)" >> "$LOG"
+    fi
+
+    if [ -n "$GS_XFORM" ]; then
+        "$GS" -q -dBATCH -dSAFER -dQUIET -dNOPAUSE \
+              -sDEVICE=pbmraw -r$RES -g$GDIM \
+              -dFIXEDMEDIA -dPDFFitPage \
+              -sOutputFile=- -c "$GS_XFORM" -f "$PDF" 2>>"$LOG" \
+          | "$CONV" $CONV_FLAGS > "$TMP" 2>>"$LOG"
+    else
     "$GS" -q -dBATCH -dSAFER -dQUIET -dNOPAUSE \
           -sDEVICE=pbmraw -r$RES -g$GDIM \
           -dFIXEDMEDIA -dPDFFitPage \
           -sOutputFile=- "$PDF" 2>>"$LOG" \
       | "$CONV" $CONV_FLAGS > "$TMP" 2>>"$LOG"
+    fi
 
     sz=$(wc -c < "$TMP")
     echo "  raster $sz bytes" >> "$LOG"
