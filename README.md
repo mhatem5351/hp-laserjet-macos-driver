@@ -210,6 +210,44 @@ touches USB — all printing stays in the watcher. See
 [`menubar/README.md`](menubar/README.md) for build, run and launch-at-login
 instructions.
 
+## Self-test / troubleshooting
+
+`hp-laserjet-doctor` runs a quick end-to-end diagnostic and prints a PASS/FAIL
+summary per check. `install.sh` puts it on your `PATH`:
+
+```bash
+hp-laserjet-doctor
+```
+
+(or run it in place: `/usr/local/share/foo2zjs/hp-laserjet-doctor.sh`).
+
+With no flags it is **entirely read-only** — it never touches the printer over
+USB. It checks:
+
+- **Dependencies** — `ghostscript` (gs), `libusb`, `poppler` (pdfinfo), and the
+  installed `fwload` (including its setuid-root bit) and the `foo2zjs`/`foo2xqx`
+  converters.
+- **Printer detection** — reads the attached HP LaserJet over `ioreg` (VID
+  `0x03f0`), exactly as the watcher does, and prints the matched model row
+  (driver / firmware / RES / XSCALE). If **no** supported printer is on the bus
+  it reports that and exits non-zero with guidance — it never guesses a model.
+- **Firmware (dry-run)** — verifies the firmware blob for the detected model is
+  installed and reports its path and size.
+- **Test-page conversion** — generates a one-page test PDF and runs a **dry**
+  conversion (`gs` → `foo2zjs`|`foo2xqx`), reporting the raster byte count. No
+  bytes are written to USB.
+
+Flags for the on-hardware tests:
+
+| Flag       | Effect                                                                 |
+|------------|------------------------------------------------------------------------|
+| `--push`   | also upload the detected model's firmware blob over USB (`fwload`).    |
+| `--print`  | run the full pipeline and print the test page on the detected printer (implies `--push`). |
+| `-h`, `--help` | show usage.                                                        |
+
+The exit status is non-zero if any check fails (including no supported printer),
+so it is safe to script.
+
 ## Uninstall
 
 ```bash

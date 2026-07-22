@@ -169,12 +169,21 @@ sudo cp "$SRC/foo2zjs"          "$PREFIX/foo2zjs"
 sudo cp "$SRC/foo2xqx"          "$PREFIX/foo2xqx"
 sudo cp "$BUILD/fwload"         "$PREFIX/fwload"
 sudo cp "$HERE/hp-laserjet-watcher.sh" "$PREFIX/hp-laserjet-watcher.sh"
+sudo cp "$HERE/hp-laserjet-doctor.sh"  "$PREFIX/hp-laserjet-doctor.sh"
 sudo cp "$FWSTAGE"/*.dl          "$PREFIX/firmware/"
-sudo chmod 755 "$PREFIX/foo2zjs" "$PREFIX/foo2xqx" "$PREFIX/hp-laserjet-watcher.sh"
+sudo chmod 755 "$PREFIX/foo2zjs" "$PREFIX/foo2xqx" "$PREFIX/hp-laserjet-watcher.sh" "$PREFIX/hp-laserjet-doctor.sh"
 sudo chmod 644 "$PREFIX/firmware"/*.dl
 # setuid root: the launchd watcher runs as the user but must claim the USB iface
 sudo chown root:wheel "$PREFIX/fwload"
 sudo chmod 4755 "$PREFIX/fwload"
+
+# Put the self-test on PATH as `hp-laserjet-doctor` (symlink into Homebrew bin).
+# Best-effort and additive: a failure here never aborts the install.
+if sudo ln -sf "$PREFIX/hp-laserjet-doctor.sh" "$BREW_PREFIX/bin/hp-laserjet-doctor" 2>/dev/null; then
+    say "  self-test installed: run 'hp-laserjet-doctor' to diagnose"
+else
+    say "  self-test installed at $PREFIX/hp-laserjet-doctor.sh (run it directly)"
+fi
 
 # --- 5. spool + launchd agent ----------------------------------------------
 step "Creating spool + launchd watcher..."
