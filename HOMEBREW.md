@@ -8,24 +8,35 @@ setup.
 
 ## Install
 
+One copy-paste line:
+
 ```bash
-# 1. Add the tap (points Homebrew at this GitLab repo)
-brew tap pauyedin/hp-laserjet https://gitlab.com/pauyedin/homebrew-hp-laserjet
-
-# 2. Install the formula (pulls in ghostscript, libusb, poppler)
-brew install hp-laserjet-mac-driver
-
-# 3. Finish setup — the caveats printed by step 2 tell you to run:
-hp-laserjet-install
-#   (equivalently: "$(brew --prefix hp-laserjet-mac-driver)/libexec/install.sh")
+brew tap pauyedin/hp-laserjet https://gitlab.com/pauyedin/homebrew-hp-laserjet && brew install hp-laserjet-mac-driver && hp-laserjet-install
 ```
 
-Step 3 prompts for your password: it builds `foo2zjs`/`foo2xqx` and `fwload`,
-obtains the firmware blobs, installs the setuid-root `fwload` into
-`/usr/local/share/foo2zjs`, loads the launchd watcher, and installs the PDF
-Service.
+Three stages, `&&`-chained so they run in order:
+
+1. **`brew tap pauyedin/hp-laserjet …`** — points Homebrew at the tap repo. Only
+   needed **once**; after that a bare `brew install hp-laserjet-mac-driver`
+   resolves the formula from the tap.
+2. **`brew install hp-laserjet-mac-driver`** — stages the driver into the Cellar
+   and pulls in `ghostscript`, `libusb`, `poppler`.
+3. **`hp-laserjet-install`** — runs the bundled `install.sh` and prompts for your
+   password: it builds `foo2zjs`/`foo2xqx` and `fwload`, obtains the firmware
+   blobs, installs the setuid-root `fwload` into `/usr/local/share/foo2zjs`, loads
+   the launchd watcher, and installs the PDF Service. (Equivalently:
+   `"$(brew --prefix hp-laserjet-mac-driver)/libexec/install.sh"`.)
 
 Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on HP LaserJet"**.
+
+### Does `brew install` work without the tap?
+
+Only if the formula were accepted into **`homebrew/core`** — and it won't be. A
+macOS-only, setuid-root printer driver whose install is finished by a bundled
+`install.sh` (via `caveats`) does not meet homebrew-core's policy (no
+sudo/setuid, no external installers, broad platform support). So a bare
+`brew install hp-laserjet-mac-driver` with no tap will not find this formula;
+the tap above is the supported route.
 
 ## Why two steps (setuid / sudo cannot run inside `brew`)
 
@@ -61,6 +72,17 @@ The formula lives in a **separate tap repo**,
 repo under `Formula/` for reference/CI; the copy `brew` actually uses is the one
 in the tap repo. On each release, update **both** (or update the tap and copy it
 here).
+
+> **⚠️ The tap repo MUST be public.** `homebrew-hp-laserjet` was created via
+> push-to-create, which makes it **private** by default. While it is private,
+> `brew tap pauyedin/hp-laserjet https://gitlab.com/pauyedin/homebrew-hp-laserjet`
+> fails over HTTPS with `fatal: could not read Password for
+> 'https://gitlab.com'` (git prompts for credentials on a repo it can't see).
+> Fix it once, in the GitLab UI: **Settings → General → Visibility, project
+> features, permissions → Project visibility → Public → Save changes.** This is
+> a GitLab-side setting no script or formula can change; verify anonymous access
+> with `git ls-remote https://gitlab.com/pauyedin/homebrew-hp-laserjet` (no
+> credential prompt = public).
 
 1. **Tag the release** in this project repo and push the tag:
 

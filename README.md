@@ -110,15 +110,23 @@ Then print from any app: **Cmd+P → PDF ▾ (bottom-left) → "Print on HP Lase
 
 ### Install via Homebrew
 
-Prefer `brew`? A Homebrew tap is available. Because the driver installs a
-setuid-root binary, a launchd agent and a PDF Service (which need `sudo` and
-per-user setup that can't run inside `brew install`), it's a two-step install:
+Prefer `brew`? A Homebrew tap is available. One copy-paste line:
 
 ```bash
-brew tap pauyedin/hp-laserjet https://gitlab.com/pauyedin/hp-laserjet-mac-driver
-brew install hp-laserjet-mac-driver
-hp-laserjet-install   # runs the bundled install.sh; prompts for your password
+brew tap pauyedin/hp-laserjet https://gitlab.com/pauyedin/homebrew-hp-laserjet && brew install hp-laserjet-mac-driver && hp-laserjet-install
 ```
+
+Three stages: **`brew tap`** points Homebrew at the tap repo (needed once —
+after that, a bare `brew install hp-laserjet-mac-driver` resolves);
+**`brew install`** stages the driver and pulls in `ghostscript`, `libusb`,
+`poppler`; and **`hp-laserjet-install`** runs the bundled `install.sh`, which
+prompts for your password to do the privileged setup (setuid-root `fwload`,
+launchd agent, PDF Service) that can't run inside `brew install`.
+
+> A bare `brew install hp-laserjet-mac-driver` with **no tap** would only work
+> if this formula were accepted into `homebrew/core` — unlikely for a
+> macOS-only, setuid-root printer driver whose caveats run an installer — so the
+> tap is the supported route.
 
 See [`HOMEBREW.md`](HOMEBREW.md) for the full walkthrough, uninstall steps, and
 the maintainer release checklist.
