@@ -130,9 +130,9 @@ The driver works with no configuration. Optionally, an
 `PAPER`, print-quality controls `DENSITY` (`1`–`5`, the converter `-T` darkness
 flag) and `ECONOMODE` (`on`/`off`, toner-save `-t`), copies/layout defaults
 `DEFAULT_COPIES` / `DEFAULT_DUPLEX` / `DEFAULT_NUP`, and `PRINTER` (which printer
-to use when several are attached); a per-job `job-<ts>.opts` sidecar can carry
-per-job `COPIES` / `DUPLEX` / `NUP` / `DENSITY` / `ECONOMODE` / `PRINTER`
-overrides. The macOS print dialog's copies/two-sided/layout controls are **not**
+to use when several are attached), paper geometry `PAPER` / `SCALE` / `MARGIN`;
+a per-job `job-<ts>.opts` sidecar can carry per-job `COPIES` / `DUPLEX` / `NUP` /
+`DENSITY` / `ECONOMODE` / `PRINTER` / `PAPER` / `SCALE` / `MARGIN` overrides. The macOS print dialog's copies/two-sided/layout controls are **not**
 read (the PDF Service is sandboxed) — use the config file or sidecar instead.
 Note most supported models are simplex-only (duplex is passed through and
 logged) and the converters have no N-up (`NUP>1` is ignored). See
@@ -153,8 +153,13 @@ are best-effort UX and never change whether or how a job prints.
 - USB detection uses `ioreg` (not `system_profiler`, which returns nothing on
   macOS Tahoe). `fwload` targets the USB Printer-class interface, so MFPs like
   the M1005 print from the right interface, not the scanner one.
-- Auto-detects **A4** vs **US Letter** from the PDF. Other sizes fall back to
-  Letter — add them to the paper table in `hp-laserjet-watcher.sh` if you need them.
+- **Paper size** auto-detects **A4** vs **US Letter** from the PDF by default.
+  Set `PAPER` (config or per-job sidecar) to force a size: `letter`, `a4`,
+  `legal`, `a5`, `executive`, `com10` (#10 envelope) or `dl` (DL envelope) —
+  each maps to the printer's paper code and the correct raster grid. Anything
+  unrecognised still falls back to Letter. `SCALE` (percent) and `MARGIN`
+  (points) further adjust the page during rasterisation. See
+  [`docs/CONFIG.md`](docs/CONFIG.md).
 - **Hardware-tested: P1102 and M1005 MFP.** Other models use the same mechanism
   (ZjStream via `foo2zjs`, or XQX via `foo2xqx`) and *should* work; the
   `model_row` table in `hp-laserjet-watcher.sh` (USB PID → driver + firmware +
