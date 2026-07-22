@@ -22,7 +22,7 @@ class HpLaserjetMacDriver < Formula
   # below to match, then refresh the sha256. GitLab serves a source tarball at
   # this path for any tag.
   url "https://gitlab.com/pauyedin/hp-laserjet-mac-driver/-/archive/v0.2.0/hp-laserjet-mac-driver-v0.2.0.tar.gz"
-  sha256 "REPLACE_ME_AFTER_TAG_PUSH"
+  sha256 "b19e1528868470c5416ef86de625e88a6a4062631570c3d3fb5eb9e73115f4d2"
 
   license "GPL-2.0-only"
 
