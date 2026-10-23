@@ -636,8 +636,20 @@ for PDF in "$SPOOL"/job-*.pdf; do
         fi
     fi
 
-    # Firmware is idempotent; push before each job in case of a power cycle.
-    "$FWLOAD" "$FW" "$VID" "$PID" >>"$LOG" 2>&1 || true
+    # Push firmware only when the printer asks for it (FWVER:PENDING) or doesn't
+    # report FWVER. Some units (e.g. P1102 with flash firmware) load their own at
+    # power-on, and re-sending it resets them into a wedged PENDING state.
+    # If the query itself fails (printer unreachable even after fwload's USB
+    # reset), don't push firmware blind — that can wedge a unit that already
+    # has firmware loaded; the page push below reports the real error.
+    if fwver=$("$FWLOAD" --fwver "$VID" "$PID" 2>>"$LOG"); then
+        case "$fwver" in
+            ""|PENDING) "$FWLOAD" "$FW" "$VID" "$PID" >>"$LOG" 2>&1 || true ;;
+            *)          echo "  firmware already loaded (FWVER:$fwver), skipping upload" >> "$LOG" ;;
+        esac
+    else
+        echo "  firmware status query failed; skipping firmware upload" >> "$LOG"
+    fi
 
     # Paper size. An explicit PAPER (config or sidecar, not "auto") forces the
     # size + raster grid via paper_spec(); PAPER=auto (the default) keeps the

@@ -73,7 +73,7 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 BREW_PREFIX="$(brew --prefix)"
 
-for pkg in ghostscript libusb poppler; do
+for pkg in ghostscript libusb; do   # poppler (pdfinfo) skipped: optional, PAPER set in config
     if brew list --versions "$pkg" >/dev/null 2>&1; then
         say "  $pkg already present"
     else
@@ -173,9 +173,10 @@ sudo cp "$HERE/hp-laserjet-doctor.sh"  "$PREFIX/hp-laserjet-doctor.sh"
 sudo cp "$FWSTAGE"/*.dl          "$PREFIX/firmware/"
 sudo chmod 755 "$PREFIX/foo2zjs" "$PREFIX/foo2xqx" "$PREFIX/hp-laserjet-watcher.sh" "$PREFIX/hp-laserjet-doctor.sh"
 sudo chmod 644 "$PREFIX/firmware"/*.dl
-# setuid root: the launchd watcher runs as the user but must claim the USB iface
+# No setuid: on this setup the user-context watcher can claim the USB interface
+# directly (verified with the P1102). Re-add `chmod 4755` if claim_interface fails.
 sudo chown root:wheel "$PREFIX/fwload"
-sudo chmod 4755 "$PREFIX/fwload"
+sudo chmod 755 "$PREFIX/fwload"
 
 # Put the self-test on PATH as `hp-laserjet-doctor` (symlink into Homebrew bin).
 # Best-effort and additive: a failure here never aborts the install.

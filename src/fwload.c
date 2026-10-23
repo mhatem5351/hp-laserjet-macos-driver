@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <libusb-1.0/libusb.h>
 
 #define DEFAULT_VID 0x03f0
@@ -126,9 +127,29 @@ static void read_status(libusb_device_handle *h, int ep_in, int ep_in_max) {
     free(reply);
 }
 
+// A printer that dozed off (or was left mid-transfer) can wedge its USB
+// interface: every control/bulk request fails with LIBUSB_ERROR_IO until the
+// device is reset. A port reset revives it without a power cycle. Returns a
+// usable handle (possibly a new one if the device re-enumerated) or NULL.
+static libusb_device_handle *reset_printer(libusb_context *ctx, libusb_device_handle *h, int vid, int pid) {
+    fprintf(stderr, "usb: resetting printer after I/O error\n");
+    int r = libusb_reset_device(h);
+    if (r == LIBUSB_SUCCESS) return h;
+    libusb_close(h);
+    for (int attempt = 0; attempt < 10; attempt++) {
+        usleep(300 * 1000);
+        libusb_device_handle *fresh = libusb_open_device_with_vid_pid(ctx, vid, pid);
+        if (fresh) return fresh;
+    }
+    return NULL;
+}
+
 int main(int argc, char **argv) {
     // --status mode: no blob, just query + read the printer's status reply.
     int status_mode = (argc >= 2 && strcmp(argv[1], "--status") == 0);
+    // --fwver mode: print the FWVER field of the IEEE-1284 device ID and exit.
+    int fwver_mode = (argc >= 2 && strcmp(argv[1], "--fwver") == 0);
+    if (fwver_mode) status_mode = 1;    // no blob; VID/PID in argv[2]/argv[3]
 
     if (!status_mode && argc < 2) {
         fprintf(stderr, "usage: %s blob [VID] [PID]\n", argv[0]);
@@ -146,14 +167,19 @@ int main(int argc, char **argv) {
     unsigned char *buf = NULL;
     long len = 0;
     if (!status_mode) {
+        // setuid root is only for USB access: open the blob as the real user so
+        // the binary can't be used to read files the caller couldn't read.
+        uid_t saved_euid = geteuid();
+        if (seteuid(getuid())) { perror("seteuid"); return 2; }
         FILE *f = fopen(argv[1], "rb");
         if (!f) { perror("open firmware"); return 2; }
         fseek(f, 0, SEEK_END); len = ftell(f); fseek(f, 0, SEEK_SET);
         buf = malloc(len);
         if (fread(buf, 1, len, f) != (size_t)len) { perror("read"); return 2; }
         fclose(f);
+        if (seteuid(saved_euid)) { perror("seteuid restore"); return 2; }
         printf("firmware: %ld bytes\n", len);
-    } else {
+    } else if (!fwver_mode) {
         printf("status query mode (no blob sent)\n");
     }
 
@@ -206,6 +232,26 @@ int main(int argc, char **argv) {
         }
     }
     if (ep_out < 0) { fprintf(stderr, "no bulk-OUT endpoint\n"); return 1; }
+
+    // --fwver: USB printer-class GET_DEVICE_ID, print the FWVER value (e.g.
+    // "20120814" when firmware is loaded, "PENDING" when it still needs one).
+    // Prints nothing if the device ID has no FWVER field.
+    if (fwver_mode) {
+        unsigned char id[1024] = {0};
+        int n = libusb_control_transfer(h, 0xA1, 0, 0, (uint16_t)(iface << 8),
+                                        id, sizeof id - 1, 3000);
+        if (n == LIBUSB_ERROR_IO || n == LIBUSB_ERROR_PIPE) {
+            h = reset_printer(ctx, h, vid, pid);
+            if (!h) { fprintf(stderr, "get_device_id: printer gone after reset\n"); return 1; }
+            n = libusb_control_transfer(h, 0xA1, 0, 0, (uint16_t)(iface << 8), id, sizeof id - 1, 3000);
+        }
+        if (n < 2) { fprintf(stderr, "get_device_id: %s\n", libusb_error_name(n)); return 1; }
+        char *v = strstr((char *)id + 2, "FWVER:");
+        if (v) { v += 6; printf("%.*s\n", (int)strcspn(v, ";"), v); }
+        libusb_close(h);
+        libusb_exit(ctx);
+        return 0;
+    }
     printf("interface %d (class %d), bulk-OUT 0x%02x", iface, iface_class, ep_out);
     if (ep_in >= 0) printf(", bulk-IN 0x%02x", ep_in);
     printf("\n");
@@ -223,12 +269,28 @@ int main(int argc, char **argv) {
     }
 
     int sent = 0;
-    while (sent < len) {
-        int chunk = len - sent; if (chunk > 4096) chunk = 4096;
-        int transferred = 0;
-        r = libusb_bulk_transfer(h, ep_out, buf + sent, chunk, &transferred, 10000);
-        if (r) { fprintf(stderr, "bulk_transfer: %s (sent %d)\n", libusb_error_name(r), sent); break; }
-        sent += transferred;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        sent = 0;
+        while (sent < len) {
+            int chunk = len - sent; if (chunk > 4096) chunk = 4096;
+            int transferred = 0;
+            r = libusb_bulk_transfer(h, ep_out, buf + sent, chunk, &transferred, 10000);
+            if (r) { fprintf(stderr, "bulk_transfer: %s (sent %d)\n", libusb_error_name(r), sent); break; }
+            sent += transferred;
+        }
+        // Retry only when nothing reached the printer: resending a partially
+        // delivered job could print garbage or duplicate pages.
+        if (sent == len || sent > 0 || attempt > 0) break;
+        if (r != LIBUSB_ERROR_IO && r != LIBUSB_ERROR_PIPE && r != LIBUSB_ERROR_TIMEOUT) break;
+        libusb_release_interface(h, iface);
+        h = reset_printer(ctx, h, vid, pid);
+        if (!h) { fprintf(stderr, "printer gone after reset\n"); return 1; }
+        libusb_set_auto_detach_kernel_driver(h, 1);
+        if ((r = libusb_claim_interface(h, iface))) {
+            fprintf(stderr, "claim_interface after reset: %s\n", libusb_error_name(r));
+            return 1;
+        }
+        usleep(500 * 1000);
     }
     if (status_mode)
         printf("sent %d/%ld bytes (PJL status query)\n", sent, len);
