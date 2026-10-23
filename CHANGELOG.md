@@ -5,6 +5,53 @@ All notable changes to **hp-laserjet-mac-driver** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1-macos27] - Unreleased (fork)
+
+Changes in the [`hp-laserjet-macos-driver`](https://github.com/mhatem5351/hp-laserjet-macos-driver)
+fork on top of upstream v0.2.0. Hardware-verified with an HP LaserJet **P1102**
+(`FWVER:20120814` unit) on **macOS 27**, Apple Silicon, connected through a USB
+hub, printing from the macOS Print dialog and from a spool-folder client
+(Folio PDF's "Print to HP LaserJet" sheet with a `job-<ts>.opts` sidecar). The
+fixes are offered upstream.
+
+### Fixed
+- **Re-sending firmware no longer wedges a P1102 that already has it.** The
+  watcher used to push the firmware blob before every job ("idempotent"). A
+  P1102 that loaded its own firmware from flash at power-on does *not* treat
+  that as a no-op: it drops into `FWVER:PENDING` and every later transfer fails
+  with USB error `0xe00002ed` until the printer is power-cycled. The watcher now
+  asks the printer first (`fwload --fwver`) and uploads the blob **only** when
+  the printer reports no firmware version or `PENDING`; otherwise it logs
+  `firmware already loaded (FWVER:…), skipping upload`. If the query itself
+  fails, the upload is skipped rather than sent blind.
+- **A dozing (idle) printer no longer fails the first job.** After sitting idle
+  the printer can reject the first USB request with `LIBUSB_ERROR_IO` / `PIPE` /
+  `TIMEOUT`. `fwload` now performs one `libusb_reset_device` (re-opening the
+  device if it re-enumerates), re-claims the interface and retries — **only
+  when no byte of the job had been sent**, so a partially delivered job is never
+  resent (no garbage or duplicate pages). The `--fwver` query gets the same
+  single reset-and-retry.
+
+### Added
+- **`fwload --fwver VID PID`** prints the `FWVER` field of the printer's
+  IEEE-1284 device ID (USB printer-class `GET_DEVICE_ID`), e.g. `20120814` when
+  firmware is loaded or `PENDING` when it still needs one; prints nothing if the
+  device ID has no `FWVER`.
+
+### Security
+- **`fwload` drops privileges while reading the blob.** It is installed
+  setuid root only so the user's launchd agent can claim the USB interface; it
+  now opens and reads the firmware/raster file with the real user's id
+  (`seteuid(getuid())`) and restores root only for USB access, so it can't be
+  used to read files the caller couldn't. (No-op when not installed setuid.)
+
+### Changed (repository)
+- GitHub issue / PR templates and a CI workflow (shell syntax + `shellcheck`,
+  macOS build of `fwload`, `foo2zjs`/`foo2xqx` and the menu-bar app) replace
+  the GitLab templates and `.gitlab-ci.yml`. README rewritten for the fork with
+  diagrams; upstream's technical documentation is kept. The Homebrew formula
+  still installs upstream's release (see `HOMEBREW.md`).
+
 ## [0.2.0] - 2026-07-22
 
 ### Added
