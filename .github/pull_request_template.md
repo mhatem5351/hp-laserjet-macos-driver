@@ -1,7 +1,8 @@
 <!--
 For adding a new model_row() entry or fixing an existing one (PID, driver,
 firmware, or geometry) in hp-laserjet-watcher.sh. Keep the scope tight — one
-logical change per MR.
+logical change per PR. For changes other than a model row, delete the sections
+that do not apply.
 -->
 
 ## What this changes

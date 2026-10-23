@@ -1,8 +1,13 @@
 # build artifacts
 *.o
 *.zjs
-fwload
-foo2zjs
+*.xqx
+*.dSYM/
+/fwload
+/foo2zjs
+/foo2xqx
+/hp-scan
+/hp-laserjet-menu
 
 # spool / logs / personal runtime data — never commit
 HP-LaserJet-spool/
@@ -10,8 +15,12 @@ HP-LaserJet-spool/
 launchd.out
 launchd.err
 
-# macOS cruft
+# macOS / editor cruft
 .DS_Store
+._*
+*.swp
+.vscode/
+.idea/
 
 # codegraph index
 .codegraph/

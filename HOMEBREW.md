@@ -1,5 +1,22 @@
 # Installing via Homebrew
 
+> **Fork note.** The Homebrew tap and the formula in [`Formula/`](Formula/)
+> belong to the **upstream** project
+> ([`pauyedin/hp-laserjet-mac-driver`](https://gitlab.com/pauyedin/hp-laserjet-mac-driver)):
+> its `url` points at upstream GitLab release tarballs, so `brew install`
+> installs **upstream's** release, *without* this fork's macOS 27 fixes
+> (firmware-version check, USB reset on a dozing printer). To install **this
+> fork**, clone it and run the installer:
+>
+> ```bash
+> git clone https://github.com/mhatem5351/hp-laserjet-macos-driver.git
+> cd hp-laserjet-macos-driver
+> ./install.sh
+> ```
+>
+> The rest of this page is upstream's Homebrew documentation, kept as-is for
+> reference.
+
 `hp-laserjet-mac-driver` ships a Homebrew formula so you can install and update
 it with `brew`. Because the driver installs a **setuid-root** USB pusher, a
 per-user **launchd** agent, and a Print-dialog **PDF Service**, installation is

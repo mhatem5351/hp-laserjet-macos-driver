@@ -1,3 +1,9 @@
+---
+name: Test report
+about: Report whether a supported HP LaserJet model prints (works or not)
+title: "Test report: <model> on macOS <version>"
+labels: ["test report"]
+---
 <!--
 Thanks for helping verify a model! This turns a ⚠️ untested row in TESTED.md
 into ✅ verified or ❌ broken — both are useful. Fill in what you can.
@@ -16,13 +22,14 @@ please keep it that way in reports too (see CONTRIBUTING.md).
 
 ## Environment
 
-- **macOS version** (e.g. Tahoe 26.5.2):
+- **macOS version** (e.g. Tahoe 26.5.2, macOS 27):
 - **Chip** (Apple Silicon model, e.g. M5 / Intel):
 - **Connection** (direct USB / USB hub — note hub speed if relevant):
 
 ## Result
 
-- **Firmware uploaded over USB?** (yes / no / error):
+- **Firmware uploaded over USB?** (yes / no / skipped "already loaded" / error):
+- **`fwload --fwver 0x03f0 <PID>` output** (e.g. `20120814`, `PENDING`, empty):
 - **Did it print?** (yes / no):
 - **Page correctness** (scaling, margins, orientation, blank/garbled, missing
   content):
@@ -42,5 +49,3 @@ Scrub: username, home path, hostname, printer serial.
 ## Anything else
 
 <!-- Workarounds tried, related issues, cartridge/toner notes, etc. -->
-
-/label ~"test report"

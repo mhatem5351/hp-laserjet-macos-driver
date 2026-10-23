@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Shell scripts (bash -n + shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash -n (syntax)
+        run: |
+          set -e
+          for f in install.sh uninstall.sh hp-laserjet-watcher.sh hp-laserjet-doctor.sh \
+                   cups-backend/hp-laserjet cups-backend/install-cups-backend.sh; do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: shellcheck (errors fail the build)
+        run: |
+          shellcheck --version
+          shellcheck --shell=bash --severity=error \
+            install.sh uninstall.sh hp-laserjet-watcher.sh hp-laserjet-doctor.sh \
+            cups-backend/hp-laserjet cups-backend/install-cups-backend.sh
+
+      - name: shellcheck (warnings, informational)
+        continue-on-error: true
+        run: |
+          shellcheck --shell=bash --severity=warning \
+            install.sh uninstall.sh hp-laserjet-watcher.sh hp-laserjet-doctor.sh \
+            cups-backend/hp-laserjet cups-backend/install-cups-backend.sh
+
+  build-macos:
+    name: Build on macOS (fwload, foo2zjs/foo2xqx, menu-bar app)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libusb
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install libusb
+
+      - name: Compile src/fwload.c
+        run: |
+          BREW_PREFIX="$(brew --prefix)"
+          cc -O2 -Wall -Wextra -Werror -I"$BREW_PREFIX/include" src/fwload.c \
+             -L"$BREW_PREFIX/lib" -lusb-1.0 -o fwload
+          file fwload
+
+      - name: Compile scanner/hp-scan.c (scaffolding)
+        run: |
+          BREW_PREFIX="$(brew --prefix)"
+          cc -O2 -Wall -I"$BREW_PREFIX/include" scanner/hp-scan.c \
+             -L"$BREW_PREFIX/lib" -lusb-1.0 -o hp-scan
+
+      - name: Build foo2zjs + foo2xqx from the vendored tarball
+        run: |
+          BUILD="$(mktemp -d)"
+          tar xzf vendor/foo2zjs-src.tar.gz -C "$BUILD"
+          make -C "$BUILD/foo2zjs-master" foo2zjs foo2xqx >/dev/null
+          test -x "$BUILD/foo2zjs-master/foo2zjs"
+          test -x "$BUILD/foo2zjs-master/foo2xqx"
+
+      - name: Type-check the menu-bar app
+        run: swiftc -typecheck menubar/HPLaserJetMenu.swift
+
+      - name: Lint plists and the Homebrew formula
+        run: |
+          plutil -lint PDFService/Info.plist PDFService/document.wflow \
+                       com.hp-laserjet.watcher.plist.in menubar/com.hp-laserjet.menubar.plist.in
+          ruby -c Formula/hp-laserjet-mac-driver.rb

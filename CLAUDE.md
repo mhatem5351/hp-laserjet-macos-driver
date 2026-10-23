@@ -115,11 +115,25 @@ class (single-function models like the P1102 report no class-7 marker). The bulk
 status read-back is purely diagnostic (proves the printer reacted) and never fails
 the transfer.
 
+A printer that has dozed off can reject the first request with
+`LIBUSB_ERROR_IO`/`PIPE`/`TIMEOUT`. `fwload` then does one `libusb_reset_device`
+(re-opening the device if it re-enumerates) and retries — but **only if zero bytes
+were sent**; resending a partially delivered job could print garbage or duplicates.
+Around opening the blob file it drops to the real uid (`seteuid(getuid())`) and
+restores root only for USB access, so the setuid binary can't read files the caller
+couldn't.
+
 ## Firmware
 
 Host-based printers have no on-board firmware — a blob must be uploaded over USB on
-every power-on (the watcher does this idempotently before each job). Blobs are HP's,
-extracted from the HPLIP plugin at install time (`FW_MAP` in `install.sh` maps
+every power-on. Before each job the watcher asks the printer first
+(`fwload --fwver VID PID`, the `FWVER` field of the IEEE-1284 device ID) and
+uploads the blob **only** when it reports none or `PENDING`. Do not go back to a
+blind push: a P1102 that already loaded firmware from its own flash wedges
+(`FWVER:PENDING`, USB error `0xe00002ed`) when it is re-sent, until power-cycled.
+If the query itself fails, the watcher skips the upload rather than pushing blind.
+
+Blobs are HP's, extracted from the HPLIP plugin at install time (`FW_MAP` in `install.sh` maps
 installed `.dl` name ← plugin `.fw.gz`). `install.sh` prefers blobs bundled in
 `vendor/` (only `sihpP1102.dl` is committed); otherwise it downloads the HPLIP plugin
 and slices the gzip out by magic-byte offset. The M1005 MFP reuses the P1005 blob —

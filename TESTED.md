@@ -30,7 +30,7 @@ this table grows** — if yours works (or doesn't), please send a report.
 | LaserJet 1005    | `0x1317`  | ZjStream | `sihp1005.dl`   | ⚠️ untested  | —             | —                       | 600×600 symmetric. |
 | LaserJet 1018    | `0x4117`  | ZjStream | `sihp1018.dl`   | ⚠️ untested  | —             | —                       | 600×600 symmetric. |
 | LaserJet 1020    | `0x2b17`  | ZjStream | `sihp1020.dl`   | ⚠️ untested  | —             | —                       | 600×600 symmetric. |
-| P1102 / P1102w   | `0x002a`  | ZjStream | `sihpP1102.dl`  | ✅ verified  | pauyedin      | (hardware-tested)       | 1200×600 asymmetric. Original tested unit. |
+| P1102 / P1102w   | `0x002a`  | ZjStream | `sihpP1102.dl`  | ✅ verified  | pauyedin; mhatem5351 | (hardware-tested); macOS 27 (Apple Silicon) | 1200×600 asymmetric. Original tested unit. Re-verified on macOS 27 via a USB hub (`FWVER:20120814` unit) with this fork's firmware-check / USB-reset fixes. |
 | P1566 / P1606    | `0x092a`  | ZjStream | `sihpP1566.dl`  | ⚠️ untested  | —             | —                       | 1200×600 asymmetric. |
 | P1005            | `0x3d17`  | XQX      | `sihpP1005.dl`  | ⚠️ untested  | —             | —                       | 1200×600 asymmetric. |
 | P1006            | `0x3e17`  | XQX      | `sihpP1006.dl`  | ⚠️ untested  | —             | —                       | 1200×600 asymmetric. |
@@ -50,7 +50,7 @@ given unit reports a different PID.
 You don't need the hardware you're missing — you need the hardware you *have*.
 Every ⚠️ row is one report away from becoming ✅ (or ❌, which is just as useful).
 
-1. Open a **Test Report** issue on GitLab (use the *Test Report* template).
+1. Open a **Test Report** issue on GitHub (use the *Test report* template).
 2. Fill in: model, USB PID (`ioreg -p IOUSB -l | grep idProduct`), your macOS
    version + chip, whether firmware uploaded, whether it printed, page
    correctness, and a scrubbed tail of `~/HP-LaserJet-spool/watcher.log`.
@@ -58,5 +58,5 @@ Every ⚠️ row is one report away from becoming ✅ (or ❌, which is just as 
    driver stores none of these; please keep reports the same (see
    `CONTRIBUTING.md`).
 
-If you fix or add a model row, open a merge request using the *Add or Fix Model*
-template. Either way, this table gets updated to credit your report.
+If you fix or add a model row, open a pull request (the PR template has the
+model-row checklist). Either way, this table gets updated to credit your report.
