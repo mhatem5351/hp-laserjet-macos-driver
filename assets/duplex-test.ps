@@ -1,0 +1,59 @@
+%!PS-Adobe-3.0
+%%Title: HP LaserJet two-sided test sheet
+%%Pages: 2
+%%EndComments
+% Two-sided calibration sheet for manual duplex (DUPLEX=manual).
+% install.sh renders this to $PREFIX/duplex-test.pdf with Ghostscript.
+% Page 1 = front, page 2 = back. Both carry an arrow pointing at the TOP edge.
+% A4-sized; the watcher fits it to whatever paper is configured.
+
+/pw 595 def /ph 842 def
+/F { findfont exch scalefont setfont } bind def
+/c { /cy exch def /cs exch def pw cs stringwidth pop sub 2 div cy moveto cs show } bind def  % (str) y c -> centred
+
+/arrow {            % big arrow pointing up, centred, tip near the top edge
+  gsave
+    0 setgray
+    pw 2 div ph 40 sub moveto
+    -70 -110 rlineto 45 0 rlineto 0 -150 rlineto 50 0 rlineto 0 150 rlineto 45 0 rlineto
+    closepath fill
+  grestore
+} bind def
+
+/lines {            % [ (a) (b) ... ] y step lines
+  /st exch def /yy exch def
+  { yy c /yy yy st sub def } forall
+} bind def
+
+%%Page: 1 1
+arrow
+18 /Helvetica-Bold F (THIS EDGE IS THE TOP) 515 c
+96 /Helvetica-Bold F (FRONT) 420 c
+14 /Helvetica F
+[ (Two-sided test sheet, side 1 of 2.)
+  ()
+  (When the dialog asks for it:)
+  (take this sheet from the output tray and put it in the input tray)
+  (with this side facing DOWN and the arrow end going in first.)
+] 360 20 lines
+newpath 30 30 moveto pw 60 sub 0 rlineto 0 ph 60 sub rlineto pw 60 sub neg 0 rlineto closepath 2 setlinewidth stroke
+showpage
+
+%%Page: 2 2
+arrow
+18 /Helvetica-Bold F (THIS EDGE IS THE TOP) 515 c
+96 /Helvetica-Bold F (BACK) 420 c
+14 /Helvetica F
+[ (Two-sided test sheet, side 2 of 2.)
+  ()
+  (Turn the sheet over like a book page, around its long edge.)
+  (If this arrow points the same way as the one on the front,)
+  (two-sided printing is set up correctly. Nothing to change.)
+  ()
+  (If this side is UPSIDE DOWN compared to the front:)
+  (turn on "Back sides come out upside down" in Folio PDF,)
+  (or add  DUPLEX_ROTATE=on  to ~/.config/hp-laserjet/config.)
+] 360 20 lines
+newpath 30 30 moveto pw 60 sub 0 rlineto 0 ph 60 sub rlineto pw 60 sub neg 0 rlineto closepath 2 setlinewidth stroke
+showpage
+%%EOF

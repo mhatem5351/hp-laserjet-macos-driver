@@ -56,7 +56,7 @@ warn() { WARN_N=$((WARN_N+1)); printf '    %s[WARN]%s %s\n' "$C_Y" "$C_0" "$*"; 
 
 usage() {
     cat <<EOF
-Usage: hp-laserjet-doctor [--push] [--print] [-h|--help]
+Usage: hp-laserjet-doctor [--push] [--print] [--duplex-test] [-h|--help]
 
 Self-test for hp-laserjet-mac-driver. With no flags it is entirely read-only
 and never touches the printer over USB (deps + detection + dry conversion).
@@ -64,6 +64,8 @@ and never touches the printer over USB (deps + detection + dry conversion).
   --push    also upload the detected model's firmware blob over USB (fwload)
   --print   run the full pipeline (gs -> foo2zjs|foo2xqx -> fwload) and print
             a one-page test page on the detected printer (implies --push)
+  --duplex-test  queue the two-sided test sheet (front/back arrows) through
+            the normal watcher, to check which way to reload the paper
   -h, --help  show this help
 
 Exit status is non-zero if any check FAILs (including no supported printer).
@@ -74,11 +76,26 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --push)     DO_PUSH=1 ;;
         --print)    DO_PRINT=1; DO_PUSH=1 ;;
+        --duplex-test) DO_DUPLEX_TEST=1 ;;
         -h|--help)  usage; exit 0 ;;
         *)          printf 'unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
     shift
 done
+
+# --duplex-test: hand the test sheet to the watcher as a normal two-sided job
+# (fronts, flip prompt, backs) and stop; the sheet itself explains the result.
+if [ "${DO_DUPLEX_TEST:-0}" = 1 ]; then
+    sheet="$PREFIX/duplex-test.pdf"
+    spool="$HOME/HP-LaserJet-spool"
+    [ -f "$sheet" ] || { printf 'test sheet missing (%s): re-run install.sh\n' "$sheet" >&2; exit 1; }
+    mkdir -p "$spool"
+    ts="$(date +%s)-duplextest"
+    printf 'DUPLEX=manual\nDUPLEX_FLIP=long\nCOPIES=1\n' > "$spool/job-$ts.opts"
+    cp "$sheet" "$spool/.incoming-$ts.pdf" && mv "$spool/.incoming-$ts.pdf" "$spool/job-$ts.pdf"
+    printf 'Queued the two-sided test sheet. Follow the dialog, then read the BACK side.\n'
+    exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # Model table — kept byte-identical to hp-laserjet-watcher.sh's model_row().

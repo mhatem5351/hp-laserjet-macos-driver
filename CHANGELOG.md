@@ -52,6 +52,25 @@ fixes are offered upstream.
   removed with the raster.
 
 ### Added
+- **Two-sided extras.**
+  - `DUPLEX_FLIP=long|short`: short-edge (notepad/calendar) turns the backs
+    180°.
+  - `DUPLEX_ROTATE=on`: turns the backs 180° for printers that deliver them
+    upside down.
+  - A FRONT/BACK test sheet (`hp-laserjet-doctor --duplex-test`, installed as
+    `duplex-test.pdf`) shows which setting a printer needs.
+  - Long jobs print in batches of `DUPLEX_BATCH` sheets (default 25) with a
+    clear-the-tray prompt between batches. A paused or failed job resumes at
+    its batch (`DUPLEX_SHEET`/`DUPLEX_PART`).
+- **Finder Quick Actions**: right-click PDFs or images → Print on HP LaserJet
+  (one-sided or two-sided). Images are converted with `sips`.
+- **USB port-disabled detection.** When a job finds no printer, the watcher
+  checks the kernel log for a port macOS switched off after failed
+  re-enumeration. It then logs `usb port disabled` and notifies you to replug
+  the cable (Folio PDF shows the same advice).
+- **Settle gap between jobs (`PUSH_GAP`, default 12 s).** A job arriving while
+  the previous one was still printing hit an I/O error, and `fwload` then
+  reset the printer mid-print. The status query and the push now wait.
 - **Two-sided printing on one-sided printers (`DUPLEX=manual`).** The watcher
   prints the front sides, shows a dialog asking you to put the stack back in
   (printed side down, top edge first, order unchanged), then prints the back

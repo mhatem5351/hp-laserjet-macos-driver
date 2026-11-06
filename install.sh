@@ -179,6 +179,15 @@ sudo cp "$HERE/hp-laserjet-doctor.sh"  "$PREFIX/hp-laserjet-doctor.sh"
 sudo cp "$FWSTAGE"/*.dl          "$PREFIX/firmware/"
 sudo chmod 755 "$PREFIX/foo2zjs" "$PREFIX/foo2xqx" "$PREFIX/hp-laserjet-watcher.sh" "$PREFIX/hp-laserjet-doctor.sh"
 sudo chmod 644 "$PREFIX/firmware"/*.dl
+# Two-sided test sheet (front/back arrows) for checking the reload direction.
+# Rendered from assets/duplex-test.ps; Folio PDF and the doctor print it.
+if gs -q -dNOPAUSE -dBATCH -dSAFER -sDEVICE=pdfwrite \
+      -sOutputFile="$BUILD/duplex-test.pdf" "$HERE/assets/duplex-test.ps" 2>/dev/null; then
+    sudo cp "$BUILD/duplex-test.pdf" "$PREFIX/duplex-test.pdf"
+    sudo chmod 644 "$PREFIX/duplex-test.pdf"
+else
+    warn "could not render the two-sided test sheet (assets/duplex-test.ps)"
+fi
 # setuid root: the launchd watcher runs as the user but must claim the USB iface
 sudo chown root:wheel "$PREFIX/fwload"
 sudo chmod 4755 "$PREFIX/fwload"
@@ -221,6 +230,24 @@ sed -e 's#<string>Print on HP LaserJet</string>#<string>Print on HP LaserJet (tw
     "$HERE/PDFService/Info.plist" > "$PDFSVC2/Contents/Info.plist"
 grep -q '^TWO_SIDED=1$' "$PDFSVC2/Contents/document.wflow" \
     || warn "two-sided PDF Service: TWO_SIDED switch not found in document.wflow"
+
+# Finder Quick Actions (right-click a PDF or image > Quick Actions): one-sided
+# and two-sided, from the same workflow with TWO_SIDED switched.
+QA_DIR="$HOME_DIR/Library/Services"
+mkdir -p "$QA_DIR"
+for qa in "Print on HP LaserJet" "Print on HP LaserJet (two-sided)"; do
+    rm -rf "$QA_DIR/$qa.workflow"
+    mkdir -p "$QA_DIR/$qa.workflow/Contents"
+    if [ "$qa" = "Print on HP LaserJet" ]; then
+        cp "$HERE/QuickAction/document.wflow" "$QA_DIR/$qa.workflow/Contents/document.wflow"
+    else
+        sed 's/^TWO_SIDED=0$/TWO_SIDED=1/' "$HERE/QuickAction/document.wflow" \
+            > "$QA_DIR/$qa.workflow/Contents/document.wflow"
+    fi
+    sed "s#<string>Print on HP LaserJet</string>#<string>$qa</string>#" \
+        "$HERE/QuickAction/Info.plist" > "$QA_DIR/$qa.workflow/Contents/Info.plist"
+done
+/System/Library/CoreServices/pbs -update 2>/dev/null || true   # refresh the Services menu
 
 # --- done -------------------------------------------------------------------
 printf '\033[1;32m\n==> Installed for user %s.\033[0m\n' "'$USER_NAME'"

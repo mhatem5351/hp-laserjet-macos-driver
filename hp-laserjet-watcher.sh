@@ -42,6 +42,14 @@ VID=0x03f0   # HP — same vendor for the whole family
 #   DEFAULT_COPIES=<n>       default copy count for a job (default 1)
 #   DEFAULT_DUPLEX=none|long|short|manual   default duplex mode (default none);
 #                            manual = two-sided by hand: fronts, flip prompt, backs
+#   DUPLEX_FLIP=long|short   two-sided by hand: long = book style (default),
+#                            short = notepad/calendar style (backs turned 180°)
+#   DUPLEX_ROTATE=on|off     on = this printer delivers the backs upside down;
+#                            turn them 180° (set after the two-sided test sheet)
+#   DUPLEX_BATCH=<sheets>    two-sided jobs longer than this go in batches
+#                            (default 25; 0 = one batch)
+#   PUSH_GAP=<seconds>       minimum gap between two pushes to the printer, so
+#                            a job never lands while the last is printing (12)
 #   DEFAULT_NUP=<n>          default pages per sheet (only 1 is honoured)
 #   NOTIFY=all|errors|none   macOS notifications (default all)
 #   PRINTER=<pid|name>       when several supported printers are attached, which
@@ -61,6 +69,10 @@ DENSITY=""
 ECONOMODE=""
 DEFAULT_COPIES=1
 DEFAULT_DUPLEX=none          # none | long | short | manual
+DUPLEX_FLIP=long             # long | short   (manual two-sided)
+DUPLEX_ROTATE=off            # on = turn backs 180° (printer-specific fix)
+DUPLEX_BATCH=25              # sheets per batch for manual two-sided; 0 = all
+PUSH_GAP=12                  # seconds between pushes (printer finishes the last)
 DEFAULT_NUP=1                # pages per sheet (converters only support 1)
 NOTIFY=all
 PRINTER=""
@@ -77,6 +89,10 @@ load_config() {
     esac
     [ -n "$DEFAULT_COPIES" ] || DEFAULT_COPIES=1
     case "$DEFAULT_DUPLEX" in none|long|short|manual) ;; *) DEFAULT_DUPLEX=none ;; esac
+    case "$DUPLEX_FLIP" in long|short) ;; *) DUPLEX_FLIP=long ;; esac
+    case "$DUPLEX_ROTATE" in on|off) ;; *) DUPLEX_ROTATE=off ;; esac
+    case "$DUPLEX_BATCH" in ""|*[!0-9]*) DUPLEX_BATCH=25 ;; esac
+    case "$PUSH_GAP" in ""|*[!0-9]*) PUSH_GAP=12 ;; esac
     [ -n "$DEFAULT_NUP" ] || DEFAULT_NUP=1
     case "$NOTIFY" in all|errors|none) ;; *) NOTIFY=all ;; esac
 }
@@ -211,6 +227,22 @@ printer_sessions() {
             printf '%s ' "$sess"
         fi
     done
+}
+
+# usb_port_disabled: echoes the hub port ("Port@01140000") if, within the last
+# hour, macOS destroyed an HP (0x03f0) device on it and then disabled the port
+# after "persistent enumeration failures", with no successful re-enumeration
+# since. Only called when a job finds no printer (log show takes ~1-3 s; the
+# kernel-process filter keeps it that fast).
+usb_port_disabled() {
+    /usr/bin/log show --last 1h --style compact \
+        --predicate 'process == "kernel" AND (eventMessage CONTAINS "0x03f0/" OR eventMessage CONTAINS "persistent enumeration failures")' \
+        2>/dev/null | awk '
+            { if (match($0, /Port@[0-9a-fA-F]+/)) port = substr($0, RSTART, RLENGTH); else next }
+            /destroying 0x03f0\//              { hp[port] = 1 }
+            /enumerated 0x03f0\//              { hp[port] = 1; off[port] = 0 }
+            /persistent enumeration failures/ { if (port in hp) off[port] = 1 }
+            END { for (p in off) if (off[p]) { print p; exit } }'
 }
 
 shopt -s nullglob
@@ -381,6 +413,13 @@ else
         # wrong interface on any other model. Leave the jobs in the spool and
         # bail — launchd re-runs us when the spool changes and every
         # StartInterval, so powering the printer on picks the jobs up.
+        # If macOS gave up re-enumerating the printer, its hub port stays off
+        # until the cable is replugged; say so. Folio PDF looks for the
+        # "usb port disabled" text, so keep it and keep it before the next line.
+        if port=$(usb_port_disabled) && [ -n "$port" ]; then
+            echo "  usb port disabled by macOS ($port): the printer failed to re-enumerate; unplug and replug its USB cable" >> "$LOG"
+            notify error "macOS switched off the printer's USB port — unplug the printer's USB cable and plug it back in"
+        fi
         echo "  no supported printer detected — deferring queued jobs" >> "$LOG"
         # Notify once per set of waiting jobs: DEFER_MARK lets the early gate
         # skip (silently) the re-runs our own log write and the timer cause.
@@ -598,6 +637,10 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     JOB_MARGIN="$MARGIN"
     JOB_PART=""                   # "backs": fronts already printed (internal)
     JOB_PAGES=""                  # page subset, e.g. 3-7,10 (default: all)
+    JOB_FLIP="$DUPLEX_FLIP"       # two-sided: long|short
+    JOB_ROTATE="$DUPLEX_ROTATE"   # two-sided: turn backs 180°
+    JOB_BATCH="$DUPLEX_BATCH"     # two-sided: sheets per batch
+    JOB_SHEET=""                  # two-sided resume point (internal)
 
     local sidecar="$1" line key val
     if [ -f "$sidecar" ]; then
@@ -623,6 +666,10 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
                 MARGIN)    JOB_MARGIN="$val" ;;
                 DUPLEX_PART) JOB_PART="$val" ;;
                 PAGES)     JOB_PAGES="$val" ;;
+                DUPLEX_FLIP)   JOB_FLIP="$val" ;;
+                DUPLEX_ROTATE) JOB_ROTATE="$val" ;;
+                DUPLEX_BATCH)  JOB_BATCH="$val" ;;
+                DUPLEX_SHEET)  JOB_SHEET="$val" ;;
                 *) ;;   # unknown keys ignored so features coexist in one sidecar
             esac
         done < "$sidecar"
@@ -632,6 +679,11 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     case "$COPIES" in ''|*[!0-9]*) COPIES=1 ;; esac
     [ "$COPIES" -ge 1 ] 2>/dev/null || COPIES=1
     case "$JOB_DUPLEX" in none|long|short|manual) ;; *) JOB_DUPLEX=none ;; esac
+    case "$JOB_FLIP" in long|short) ;; *) JOB_FLIP=long ;; esac
+    case "$JOB_ROTATE" in on|off) ;; *) JOB_ROTATE=off ;; esac
+    case "$JOB_BATCH" in ""|*[!0-9]*) JOB_BATCH=25 ;; esac
+    case "$JOB_SHEET" in ""|*[!0-9]*) JOB_SHEET=1 ;; esac
+    case "$JOB_PART" in fronts|backs) ;; *) JOB_PART=fronts ;; esac
     case "$JOB_NUP" in ''|*[!0-9]*) JOB_NUP=1 ;; esac
     [ "$JOB_NUP" -ge 1 ] 2>/dev/null || JOB_NUP=1
 
@@ -692,7 +744,7 @@ keep_failed() {   # $1 = job pdf   $2 = its .opts sidecar (may not exist)
 # No answer within 2 minutes, or no GUI session, counts as Later. The message
 # is passed as an argv item, never spliced into AppleScript source.
 ask_reprint() {   # $1 = failed job pdf
-    local f="$1" base ts when pages title copies msg ans
+    local f="$1" base ts when pages title copies msg ans dpart dsheet
     base=${f##*/}; ts=${base#job-}; ts=${ts%%[!0-9]*}
     when=$(date -r "$ts" '+%a %d %b at %H:%M' 2>/dev/null) || when="earlier"
     if [ -n "$PDFINFO" ]; then
@@ -701,8 +753,13 @@ ask_reprint() {   # $1 = failed job pdf
     fi
     copies=$(sed -n 's/^COPIES=\([0-9][0-9]*\)$/\1/p' "${f%.pdf}.opts" 2>/dev/null | head -n1)
     [ "${copies:-1}" -gt 1 ] 2>/dev/null || copies=""
-    if grep -q '^DUPLEX_PART=backs' "${f%.pdf}.opts" 2>/dev/null; then
-        msg="The back sides of a two-sided job sent $when have not printed yet. Keep its printed front sides ready."
+    # A parked two-sided job carries its resume point; the last line wins.
+    dpart=$(sed -n 's/^DUPLEX_PART=//p' "${f%.pdf}.opts" 2>/dev/null | tail -n1)
+    dsheet=$(sed -n 's/^DUPLEX_SHEET=//p' "${f%.pdf}.opts" 2>/dev/null | tail -n1)
+    if [ "$dpart" = backs ]; then
+        msg="The back sides of a two-sided job sent $when have not printed yet (from sheet ${dsheet:-1}). Keep its printed sheets ready."
+    elif [ "${dsheet:-1}" -gt 1 ] 2>/dev/null; then
+        msg="A two-sided job sent $when stopped after sheet $(( dsheet - 1 )). The rest (from sheet $dsheet) can print now."
     else
         msg="A print job sent $when did not reach the printer."
     fi
@@ -767,10 +824,22 @@ remember_printer_state() {
 # $1 is Ghostscript's -sOutputFile target: "-" streams every page to stdout
 # (one-sided path, piped into the converter); a "%05d" pattern writes one file
 # per page (two-sided path). PAGES= selects a subset via -sPageList.
-render_pages() {   # $1 = gs OutputFile target
-    local pl=()
+render_pages() {   # $1 = gs OutputFile target   $2 = "rot": turn every page 180°
+    local pl=() pwph
     [ -n "$JOB_PAGES" ] && pl=("-sPageList=$JOB_PAGES")
-    if [ -n "$GS_XFORM" ]; then
+    if [ "${2:-}" = rot ]; then
+        # 180° about the page centre (BeginPage gets the page count: pop it),
+        # composed with any scale/margin transform. Verified to survive
+        # -dPDFFitPage: the ink of the top and bottom halves swaps exactly.
+        pwph=$(awk -v g="$GDIM" -v r="$RES" 'BEGIN { split(g, G, "x"); split(r, R, "x");
+            printf "%.3f %.3f", G[1] * 72 / R[1], G[2] * 72 / R[2] }')
+        "$GS" -q -dBATCH -dSAFER -dQUIET -dNOPAUSE \
+              -sDEVICE=pbmraw -r"$RES" -g"$GDIM" \
+              -dFIXEDMEDIA -dPDFFitPage ${pl[@]+"${pl[@]}"} \
+              -sOutputFile="$1" \
+              -c "<< /BeginPage { pop $pwph translate 180 rotate $XFORM_BODY } >> setpagedevice" \
+              -f "$PDF" 2>>"$LOG"
+    elif [ -n "$GS_XFORM" ]; then
         "$GS" -q -dBATCH -dSAFER -dQUIET -dNOPAUSE \
               -sDEVICE=pbmraw -r"$RES" -g"$GDIM" \
               -dFIXEDMEDIA -dPDFFitPage ${pl[@]+"${pl[@]}"} \
@@ -785,9 +854,30 @@ render_pages() {   # $1 = gs OutputFile target
 
 # push_raster: send one converted raster; logs "fwload exit N (label)", the
 # line Folio PDF and the menu bar parse for the outcome.
+#
+# Settle gap: a host-based printer still printing the previous push rejects
+# the next first write with an I/O error, and fwload then resets it mid-print
+# (seen knocking the P1102 off USB). So a push starts at least PUSH_GAP seconds
+# after the previous one ended, across runs too (stamp kept outside the spool
+# so it doesn't wake the watcher).
+LAST_PUSH_FILE="/tmp/hp-laserjet-last-push.$(id -u)"
+settle_wait() {
+    local last now wait
+    last=$(cat "$LAST_PUSH_FILE" 2>/dev/null)
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    now=$(date +%s)
+    wait=$(( last + PUSH_GAP - now ))
+    if [ "$wait" -gt 0 ] && [ "$wait" -le "$PUSH_GAP" ]; then
+        echo "  waiting ${wait}s for the printer to finish the previous job" >> "$LOG"
+        sleep "$wait"
+    fi
+}
 push_raster() {   # $1 = raster file   $2 = label for the log
+    local rc
+    settle_wait
     "$FWLOAD" "$1" "$VID" "$PID" >>"$LOG" 2>&1
-    local rc=$?
+    rc=$?
+    date +%s > "$LAST_PUSH_FILE"
     echo "  fwload exit $rc ($2)" >> "$LOG"
     return "$rc"
 }
@@ -810,7 +900,7 @@ page_labels() {
         b=${f##*/}
         case "$b" in
             blank.pbm) out="$out blank" ;;
-            *) b=${b#p}; b=${b%.pbm}; b=$((10#$b))
+            *) b=${b#[pr]}; b=${b%.pbm}; b=$((10#$b))
                [ "${#map[@]}" -ge "$b" ] && b=${map[$((b - 1))]}
                out="$out $b" ;;
         esac
@@ -818,26 +908,27 @@ page_labels() {
     echo "${out# }"
 }
 
-# ask_flip: the mid-job prompt between fronts and backs. Echoes Print | Cancel
-# | Later (no answer within an hour, or no GUI session).
-ask_flip() {   # $1 = sheets   $2 = pages per copy
-    local msg ans
-    if [ "$JOB_PART" = backs ]; then
-        msg="Ready to print the back sides of a two-sided job ($1 sheet(s))."
+# ask_flip: the prompt between a batch's fronts and its backs. Echoes Print |
+# Cancel | Later (no answer within an hour, or no GUI session).
+ask_flip() {   # $1 = batch  $2 = batches  $3 = sheets in batch  $4 = pages per copy  $5 = 1 if fronts printed earlier
+    local msg ans pre=""
+    [ "$2" -gt 1 ] && pre="Batch $1 of $2: "
+    if [ "$5" = 1 ]; then
+        msg="${pre}Ready to print the back sides of a two-sided job ($3 sheet(s)). Have the printed sheets ready."
     else
-        msg="The front sides are printing now ($1 sheet(s))."
+        msg="${pre}The front sides are printing now ($3 sheet(s))."
     fi
     msg="$msg
 
 When the printer has finished:
-1. Take the whole printed stack from the output tray. Keep the sheets in the same order.
+1. Take the printed stack from the output tray. Keep the sheets in the same order.
 2. Put it in the input tray with the printed side facing DOWN and the top of the pages going into the printer first.
 3. Click \"Print back sides\".
 
 The back sides print in reverse order, so each one lands behind its own front."
-    if [ $(( $2 % 2 )) -eq 1 ]; then
+    if [ $(( $4 % 2 )) -eq 1 ]; then
         msg="$msg
-The document has an odd number of pages, so the sheet with the last page (the first one to go back in) gets a blank back."
+The document has an odd number of pages, so the sheet holding its last page gets a blank back."
     fi
     ans=$(osascript - "$msg" 2>/dev/null <<'OSA'
 on run argv
@@ -854,12 +945,51 @@ OSA
     esac
 }
 
-# park_backs: fronts are on paper but the backs didn't print (push failed or
-# the flip prompt went unanswered). Save the job marked DUPLEX_PART=backs so
-# a later "Print" in the reprint prompt sends only the back sides.
-park_backs() {
+# ask_next_batch: between batches of a long two-sided job. The finished sheets
+# must leave the output tray first, or the next fronts would land on them.
+# Echoes Print | Stop | Later.
+ask_next_batch() {   # $1 = next batch  $2 = batches
+    local msg ans
+    msg="Batch $(( $1 - 1 )) of $2 is finished.
+
+1. Take the finished sheets out of the output tray and keep them face up, in the same order.
+2. Put each next batch's finished sheets UNDER that pile, so the document stays in order.
+3. Make sure the input tray has blank paper, then click \"Print next batch\"."
+    ans=$(osascript - "$msg" 2>/dev/null <<'OSA'
+on run argv
+    set r to display dialog (item 1 of argv) with title "HP LaserJet: two-sided printing" buttons {"Stop", "Print next batch"} default button "Print next batch" with icon note giving up after 3600
+    if gave up of r then return "Later"
+    return button returned of r
+end run
+OSA
+)
+    case "$ans" in
+        "Print next batch") echo Print ;;
+        Stop)               echo Stop ;;
+        *)                  echo Later ;;
+    esac
+}
+
+# park_rest: save a two-sided job to resume later from sheet $1, starting with
+# its fronts or its backs ($2). The reprint prompt then prints only what's left.
+park_rest() {   # $1 = sheet (1-based)   $2 = fronts|backs
     keep_failed "$PDF" "$OPTS"
-    printf 'DUPLEX=manual\nDUPLEX_PART=backs\n' >> "$FAILED_DIR/${OPTS##*/}"
+    printf 'DUPLEX=manual\nDUPLEX_SHEET=%s\nDUPLEX_PART=%s\n' "$1" "$2" >> "$FAILED_DIR/${OPTS##*/}"
+}
+
+# convert_push: PBM files -> converter -> raster -> printer. Returns 2 when the
+# conversion produced nothing, else fwload's status.
+convert_push() {   # $1 = raster path   $2 = log label   $3... = PBM files
+    local out="$1" label="$2"
+    shift 2
+    # shellcheck disable=SC2086
+    cat "$@" | "$CONV" $CONV_FLAGS > "$out" 2>>"$LOG"
+    if [ "$(wc -c < "$out")" -lt 32 ]; then
+        echo "  empty conversion, skipped" >> "$LOG"
+        notify error "Print failed on $(printer_label) (conversion produced no output)"
+        return 2
+    fi
+    push_raster "$out" "$label"
 }
 
 # print_manual_duplex: two-sided printing on a one-sided printer.
@@ -872,9 +1002,14 @@ park_backs() {
 # 6,4,2. An odd page count gets a blank back for its last sheet (it feeds
 # first, so it leads the reversed list: blank,4,2). With copies, each copy
 # starts on a fresh sheet. A 1-page job just prints one-sided.
+#
+# Long jobs go in batches of DUPLEX_BATCH sheets (fronts, flip, backs, then a
+# prompt to clear the output tray). Backs are turned 180° for a short-edge flip
+# (DUPLEX_FLIP=short) and/or when the printer needs it (DUPLEX_ROTATE=on).
+# DUPLEX_SHEET/DUPLEX_PART resume a parked job where it stopped.
 print_manual_duplex() {
-    local dir n w h c i total sheets ans
-    local seq=() fronts=() backs=()
+    local dir n w h c i k total sheets bsz nb b s e start part rot=0 done_one=0 ans backs_only
+    local seq=() fl=() bl=() f
     dir=$(mktemp -d /tmp/hp-laserjet.XXXXXX) || return 0
     render_pages "$dir/p%05d.pbm"
     set -- "$dir"/p*.pbm
@@ -893,6 +1028,11 @@ $(LC_ALL=C head -c 256 "$1" | LC_ALL=C awk 'NR > 1 && !/^#/ { print $1, $2; exit
 EOF
     { printf 'P4\n%s %s\n' "$w" "$h"; head -c $(( (w + 7) / 8 * h )) /dev/zero; } > "$dir/blank.pbm"
 
+    # Backs turned 180°: short-edge flip, toggled again by the printer fix.
+    [ "$JOB_FLIP" = short ] && rot=$(( 1 - rot ))
+    [ "$JOB_ROTATE" = on ] && rot=$(( 1 - rot ))
+    [ "$rot" -eq 1 ] && render_pages "$dir/r%05d.pbm" rot
+
     c=1
     while [ "$c" -le "${COPIES:-1}" ]; do
         seq+=("$@")
@@ -901,54 +1041,83 @@ EOF
     done
     total=${#seq[@]}
     sheets=$(( total / 2 ))
-    i=0
-    while [ "$i" -lt "$total" ]; do fronts+=("${seq[$i]}"); i=$((i + 2)); done
-    i=$(( total - 1 ))
-    while [ "$i" -ge 1 ]; do backs+=("${seq[$i]}"); i=$((i - 2)); done
-    echo "  two-sided: $n page(s) x ${COPIES:-1} cop(y/ies) -> $sheets sheet(s)" >> "$LOG"
-    echo "  two-sided fronts: $(page_labels "${fronts[@]}")" >> "$LOG"
-    echo "  two-sided backs (reversed): $(page_labels "${backs[@]}")" >> "$LOG"
+    bsz=${JOB_BATCH:-0}
+    [ "$bsz" -ge 1 ] 2>/dev/null || bsz=$sheets
+    nb=$(( (sheets + bsz - 1) / bsz ))
+    start=${JOB_SHEET:-1}
+    { [ "$start" -ge 1 ] && [ "$start" -le "$sheets" ]; } 2>/dev/null || start=1
+    part=${JOB_PART:-fronts}
+    echo "  two-sided: $n page(s) x ${COPIES:-1} cop(y/ies) -> $sheets sheet(s) in $nb batch(es); flip=$JOB_FLIP backs-rotated=$rot" >> "$LOG"
+    [ "$start" -gt 1 ] || [ "$part" = backs ] && \
+        echo "  two-sided: resuming at sheet $start ($part)" >> "$LOG"
 
-    # shellcheck disable=SC2086
-    cat "${fronts[@]}" | "$CONV" $CONV_FLAGS > "$dir/fronts.raster" 2>>"$LOG"
-    # shellcheck disable=SC2086
-    cat "${backs[@]}"  | "$CONV" $CONV_FLAGS > "$dir/backs.raster"  2>>"$LOG"
-    rm -f "$dir"/p*.pbm "$dir/blank.pbm"
-    if [ "$(wc -c < "$dir/fronts.raster")" -lt 32 ] || [ "$(wc -c < "$dir/backs.raster")" -lt 32 ]; then
-        echo "  empty conversion, skipped" >> "$LOG"
-        notify error "Print failed on $(printer_label) (conversion produced no output)"
-        rm -rf "$dir"
-        return 0
-    fi
+    s=$(( start - 1 ))
+    b=$(( s / bsz ))
+    while [ "$s" -lt "$sheets" ]; do
+        b=$(( b + 1 ))
+        e=$(( s + bsz - 1 )); [ "$e" -ge "$sheets" ] && e=$(( sheets - 1 ))
+        k=$(( e - s + 1 ))
+        fl=(); bl=()
+        i=$s; while [ "$i" -le "$e" ]; do fl+=("${seq[$(( 2 * i ))]}"); i=$(( i + 1 )); done
+        i=$e
+        while [ "$i" -ge "$s" ]; do
+            f=${seq[$(( 2 * i + 1 ))]}
+            [ "$rot" -eq 1 ] && [ "${f##*/}" != blank.pbm ] && f="$dir/r${f##*/p}"
+            bl+=("$f"); i=$(( i - 1 ))
+        done
+        echo "  two-sided batch $b/$nb (sheets $(( s + 1 ))-$(( e + 1 ))) fronts: $(page_labels "${fl[@]}")" >> "$LOG"
+        echo "  two-sided batch $b/$nb backs (reversed): $(page_labels "${bl[@]}")" >> "$LOG"
 
-    if [ "$JOB_PART" = backs ]; then
-        echo "  two-sided: fronts printed earlier; printing the back sides only" >> "$LOG"
-    elif ! push_raster "$dir/fronts.raster" "two-sided fronts, $sheets sheet(s)"; then
-        RUN_FAILED=1
-        keep_failed "$PDF" "$OPTS"
-        notify error "Print failed on $(printer_label) — job saved; reconnect or power-cycle the printer and you'll be asked to reprint it"
-        rm -rf "$dir"
-        return 0
-    fi
+        backs_only=0
+        [ "$done_one" -eq 0 ] && [ "$part" = backs ] && backs_only=1
+        if [ "$backs_only" -eq 0 ]; then
+            if [ "$done_one" -eq 1 ]; then
+                ans=$(ask_next_batch "$b" "$nb")
+                echo "  two-sided: next-batch prompt -> $ans" >> "$LOG"
+                case "$ans" in
+                    Stop)  echo "  two-sided: stopped before batch $b" >> "$LOG"; rm -rf "$dir"; return 0 ;;
+                    Later) RUN_FAILED=1; park_rest "$(( s + 1 ))" fronts
+                           notify error "Two-sided job paused — saved; you'll be asked to print the rest later"
+                           rm -rf "$dir"; return 0 ;;
+                esac
+            fi
+            convert_push "$dir/fronts.raster" "two-sided fronts, batch $b/$nb, $k sheet(s)" "${fl[@]}"
+            case $? in
+                0) ;;
+                2) rm -rf "$dir"; return 0 ;;
+                *) RUN_FAILED=1; park_rest "$(( s + 1 ))" fronts
+                   notify error "Print failed on $(printer_label) — job saved; reconnect or power-cycle the printer and you'll be asked to reprint it"
+                   rm -rf "$dir"; return 0 ;;
+            esac
+        else
+            echo "  two-sided: fronts of sheets $(( s + 1 ))-$(( e + 1 )) printed earlier; backs only" >> "$LOG"
+        fi
 
-    ans=$(ask_flip "$sheets" "$n")
-    echo "  two-sided: flip prompt -> $ans" >> "$LOG"
-    case "$ans" in
-        Print)
-            if push_raster "$dir/backs.raster" "two-sided backs, $sheets sheet(s)"; then
-                notify success "Printed two-sided on $(printer_label)"
-            else
-                RUN_FAILED=1
-                park_backs
-                notify error "Back sides failed on $(printer_label) — saved; reconnect or power-cycle the printer and you'll be asked to print them"
-            fi ;;
-        Later)
-            RUN_FAILED=1     # don't re-offer in this same run
-            park_backs
-            notify error "Back sides not printed — saved; you'll be asked again later" ;;
-        *)
-            echo "  two-sided: back sides cancelled" >> "$LOG" ;;
-    esac
+        ans=$(ask_flip "$b" "$nb" "$k" "$n" "$backs_only")
+        echo "  two-sided: flip prompt -> $ans" >> "$LOG"
+        case "$ans" in
+            Print)
+                convert_push "$dir/backs.raster" "two-sided backs, batch $b/$nb, $k sheet(s)" "${bl[@]}"
+                case $? in
+                    0) ;;
+                    2) rm -rf "$dir"; return 0 ;;
+                    *) RUN_FAILED=1; park_rest "$(( s + 1 ))" backs
+                       notify error "Back sides failed on $(printer_label) — saved; reconnect or power-cycle the printer and you'll be asked to print them"
+                       rm -rf "$dir"; return 0 ;;
+                esac ;;
+            Later)
+                RUN_FAILED=1     # don't re-offer in this same run
+                park_rest "$(( s + 1 ))" backs
+                notify error "Back sides not printed — saved; you'll be asked again later"
+                rm -rf "$dir"; return 0 ;;
+            *)
+                echo "  two-sided: back sides cancelled" >> "$LOG"
+                rm -rf "$dir"; return 0 ;;
+        esac
+        done_one=1
+        s=$(( e + 1 ))
+    done
+    notify success "Printed two-sided on $(printer_label)"
     rm -rf "$dir"
 }
 
@@ -995,6 +1164,7 @@ for PDF in "$SPOOL"/job-*.pdf; do
     # If the query itself fails (printer unreachable even after fwload's USB
     # reset), don't push firmware blind — that can wedge a unit that already
     # has firmware loaded; the page push below reports the real error.
+    settle_wait     # never query (or reset) a printer still printing the last job
     if fwver=$("$FWLOAD" --fwver "$VID" "$PID" 2>>"$LOG"); then
         case "$fwver" in
             ""|PENDING) "$FWLOAD" "$FW" "$VID" "$PID" >>"$LOG" 2>&1 || true ;;
@@ -1047,6 +1217,7 @@ for PDF in "$SPOOL"/job-*.pdf; do
     # so convert the pixel grid to points: pt = px * 72 / rdpi. For the 1200x600
     # models the across resolution differs from down, so split rx/ry.
     GS_XFORM=""
+    XFORM_BODY=""                 # same transform, bare (composed with rotation)
     if [ -n "$JOB_SCALE" ] || [ -n "$JOB_MARGIN" ]; then
         rx=${RES%x*}; ry=${RES#*x}
         gw=${GDIM%x*}; gh=${GDIM#*x}
@@ -1072,6 +1243,7 @@ $(awk -v pw="$pw" -v ph="$ph" -v sc="$sc" -v mg="$mg" 'BEGIN {
 EOF
         GS_XFORM=$(printf '<< /BeginPage { %s %s translate %s dup scale } >> setpagedevice' \
             "$txf" "$tyf" "$sxf")
+        XFORM_BODY="$txf $tyf translate $sxf dup scale"
         echo "  gs transform: scale=${JOB_SCALE:-100}% margin=${JOB_MARGIN:-0}pt -> factor=$sxf (page ${pw}x${ph}pt)" >> "$LOG"
     fi
 
@@ -1109,9 +1281,8 @@ EOF
         job_rc=0
         i=1
         while [ "$i" -le "$pushes" ]; do
-            "$FWLOAD" "$TMP" "$VID" "$PID" >>"$LOG" 2>&1
+            push_raster "$TMP" "push $i/$pushes"
             fw_rc=$?
-            echo "  fwload exit $fw_rc (push $i/$pushes)" >> "$LOG"
             [ "$fw_rc" -ne 0 ] && job_rc="$fw_rc"
             i=$((i + 1))
         done
@@ -1141,6 +1312,7 @@ PASS=2
 [ "$RUN_FAILED" -eq 0 ] || break
 set -- "$FAILED_DIR"/job-*.pdf
 [ "$#" -gt 0 ] || break
+settle_wait
 if [ "$OFFER_ONLY" -eq 1 ] && ! "$FWLOAD" --fwver "$VID" "$PID" >/dev/null 2>>"$LOG"; then
     echo "  printer reconnected but not answering; parked jobs wait" >> "$LOG"
     remember_printer_state      # don't re-probe until the next reconnect

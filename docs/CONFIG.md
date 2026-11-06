@@ -43,6 +43,10 @@ EOF
 | `ECONOMODE`      | `on` \| `off`, or unset | unset | Toner-save / draft mode. `off`/unset adds no flag. See [Print quality / density](#print-quality--density). |
 | `DEFAULT_COPIES` | integer ≥ 1         | `1`     | Default number of copies per job when a job does not specify its own. |
 | `DEFAULT_DUPLEX` | `none` \| `long` \| `short` \| `manual` | `none`  | Default duplex mode per job. `manual` = two-sided by hand (see [Two-sided printing by hand](#two-sided-printing-by-hand-duplexmanual)). `long`/`short` need a hardware duplexer, which most supported models lack. |
+| `DUPLEX_FLIP`    | `long` \| `short`  | `long`  | Two-sided by hand: `long` = book style, `short` = notepad/calendar style (backs turned 180°). Folio PDF picks `short` for 2-per-sheet and booklets. |
+| `DUPLEX_ROTATE`  | `on` \| `off`      | `off`   | Turn the back sides 180° because this printer delivers them upside down. Set it after printing the [two-sided test sheet](#two-sided-test-sheet). |
+| `DUPLEX_BATCH`   | integer ≥ 0         | `25`    | Two-sided jobs longer than this many sheets print in batches (fronts, flip, backs, then clear the tray). `0` = one batch. |
+| `PUSH_GAP`       | seconds             | `12`    | Minimum gap between two jobs sent to the printer, so a job never arrives while the previous one is printing. |
 | `DEFAULT_NUP`    | integer ≥ 1         | `1`     | Default pages-per-sheet. Only `1` is honoured; the converters have no N-up (see below). |
 | `NOTIFY`         | `all` \| `errors` \| `none` | `all` | macOS notifications on job completion (see below). |
 | `PRINTER`        | USB PID or name substring, or unset | unset | Which printer to use when **several** supported printers are attached. See "Selecting a printer" below. Ignored when only one supported printer is present. |
@@ -143,6 +147,9 @@ that take precedence over the user config file for that one job. Recognised keys
 | `COPIES`    | `COPIES=2`      | Number of copies for this job.                      |
 | `DUPLEX`    | `DUPLEX=manual` | Two-sided printing: `manual` (by hand, any printer), or `long`\|`short` (hardware duplexer only), or `none`. |
 | `PAGES`     | `PAGES=3-7,10`  | Print only these pages (comma-separated pages and ascending ranges). Works one-sided and two-sided. |
+| `DUPLEX_FLIP` | `DUPLEX_FLIP=short` | Two-sided flip edge for this job (`long`\|`short`). |
+| `DUPLEX_ROTATE` | `DUPLEX_ROTATE=on` | Turn this job's backs 180° (overrides the config). |
+| `DUPLEX_BATCH` | `DUPLEX_BATCH=10` | Sheets per two-sided batch for this job. |
 | `NUP`       | `NUP=2`         | Pages per sheet (N-up).                             |
 | `DENSITY`   | `DENSITY=3`     | Print-density override (`1`–`5`) for this job.      |
 | `ECONOMODE` | `ECONOMODE=on`  | Toner-save / draft mode for this job.               |
@@ -318,7 +325,7 @@ Rules that keep every back on the right sheet:
   the split uses the order of the pages being printed. `PAGES=3-7` → fronts
   3 5 7, backs blank 6 4.
 - **Copies**: each copy starts on a fresh sheet (an odd-length copy gets a
-  blank back), and all fronts print before the single flip.
+  blank back). Copies are part of the same sheet run (and its batches).
 - **One page**: nothing to put on a back, so it prints one-sided.
 
 If the dialog is answered **Cancel back sides**, the job ends after the fronts.
@@ -326,11 +333,29 @@ If it goes unanswered for an hour, or the backs fail to print, the job is saved
 as "back sides only" and you're asked again later (see failed jobs). Reprinting
 it sends only the backs.
 
-If your backs come out upside down, reload the stack rotated 180° instead.
+Long jobs print in **batches** of `DUPLEX_BATCH` sheets (default 25), which keeps
+the trays from overflowing and limits the damage of a jam. After each batch a
+dialog asks you to take the finished sheets out (face up, in order) and put the
+next batch's sheets **under** them. A paused job resumes at the batch where it
+stopped (`DUPLEX_SHEET` and `DUPLEX_PART` in its saved sidecar).
 
 Ways to request it: the **"Print on HP LaserJet (two-sided)"** entry in the
-Print dialog's PDF menu, Folio PDF's **Sides: Both sides** switch, a per-job
-`DUPLEX=manual` sidecar, or `DEFAULT_DUPLEX=manual` in the config.
+Print dialog's PDF menu or in Finder's Quick Actions, Folio PDF's **Sides: Both
+sides** switch, a per-job `DUPLEX=manual` sidecar, or `DEFAULT_DUPLEX=manual`
+in the config.
+
+**Flip edge.** `DUPLEX_FLIP=long` (default) reads like a book. `short` turns the
+backs 180° for notepad/calendar style, which is also what 2-per-sheet and
+booklet sheets need: their landscape layout sits sideways on the paper.
+
+### Two-sided test sheet
+
+Run `hp-laserjet-doctor --duplex-test` (or Folio PDF's **Print a two-sided test
+sheet**). It prints one sheet: FRONT with an arrow at the top, then, after the
+usual reload prompt, BACK with an arrow. Turn the sheet over like a book page.
+If the BACK arrow points the same way, nothing to change. If it's upside down,
+set `DUPLEX_ROTATE=on` in the config (Folio's **Back sides come out upside
+down** switch writes the same key).
 
 ### N-up
 

@@ -122,6 +122,16 @@ keep anything touching USB or execing binaries out of the PDF Service.
   position in the printed subset (`PAGES=`), not the original page number. A
   `DUPLEX_PART=backs` sidecar line marks a saved job whose fronts already
   printed. Folio PDF parses the first `fwload exit` line (the fronts).
+  Batches of `DUPLEX_BATCH` sheets; a parked job resumes via `DUPLEX_SHEET`
+  plus `DUPLEX_PART` (last sidecar line wins). Backs are turned 180°
+  (`render_pages … rot`, a `BeginPage` transform verified to survive
+  `-dPDFFitPage`) when `DUPLEX_FLIP=short` XOR `DUPLEX_ROTATE=on`.
+- **Settle gap.** `settle_wait` holds every status query and push until
+  `PUSH_GAP` s after the last push (stamp in `/tmp/hp-laserjet-last-push.<uid>`,
+  outside the spool so it doesn't wake launchd). A busy printer's I/O error
+  otherwise makes fwload reset it mid-print, and macOS then disables the
+  port. `usb_port_disabled` detects that in the kernel log; filter on
+  `process == "kernel"` or `log show` takes tens of seconds.
 - Paper size auto-detected via `pdfinfo` page height (A4 842pt vs Letter 792pt);
   anything else falls back to Letter.
 

@@ -146,6 +146,19 @@ then print **in reverse order**, so each lands behind its own front. Odd page co
 the last sheet, and page ranges work too (pages 3–7 → fronts 3 5 7, backs blank 6 4). Details:
 [docs/CONFIG.md](docs/CONFIG.md#two-sided-printing-by-hand-duplexmanual).
 
+- **First time:** run `hp-laserjet-doctor --duplex-test` to print a one-sheet FRONT/BACK test. If the
+  BACK comes out upside down, set `DUPLEX_ROTATE=on` (or Folio's **Back sides come out upside down**).
+- **Long documents** print in batches of 25 sheets (`DUPLEX_BATCH`), with a prompt to clear the output
+  tray between batches.
+- **Flip edge:** book style by default; `DUPLEX_FLIP=short` for notepad/calendar style. Folio PDF's
+  2-per-sheet and booklet layouts set it for you.
+
+### From Finder (Quick Actions)
+
+Right-click a PDF or an image (PNG, JPEG, HEIC, TIFF…) → **Quick Actions → Print on HP LaserJet** or
+**Print on HP LaserJet (two-sided)**. Images are converted to PDF first; each file is one job. If the
+entries don't show, enable them in System Settings → General → Login Items & Extensions → Finder.
+
 ### By dropping a PDF into the spool folder
 
 Anything that can write a file can print. Copy the file under a temporary name first, then rename it
@@ -311,6 +324,15 @@ on its first write, check the kernel log:
 `/usr/bin/log show --last 10m --predicate 'senderImagePath CONTAINS[c] "USB"' | grep transaction`.
 `status 0xe00002ed (transaction error)` on the printer's endpoints is a USB link fault below the
 driver. Power-cycle the printer, and plug it straight into the Mac rather than through a hub or dock.
+
+### The printer vanished after a job ("usb port disabled")
+
+If the printer stops answering while it is printing, macOS may fail to re-enumerate it and switch its
+USB port off ("failed to address device, disabling port" in the kernel log). Nothing on the Mac can turn
+it back on: **unplug the printer's USB cable and plug it back in**. Queued jobs then print by themselves.
+The watcher spots this when a job finds no printer and says so in the log, a notification, and Folio PDF.
+It also waits `PUSH_GAP` seconds (default 12) between jobs, so the printer is never reset in the middle
+of a page, which is what triggers this.
 
 ### Other quick checks
 
