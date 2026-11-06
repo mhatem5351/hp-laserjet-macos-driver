@@ -189,8 +189,14 @@ int main(int argc, char **argv) {
     libusb_device_handle *h = libusb_open_device_with_vid_pid(ctx, vid, pid);
     if (!h) { fprintf(stderr, "printer not found (VID %04x PID %04x)\n", vid, pid); return 1; }
 
-    // macOS: kernel/class driver may hold the interface; detach if possible.
-    libusb_set_auto_detach_kernel_driver(h, 1);
+    // Deliberately NO libusb_set_auto_detach_kernel_driver(). macOS has no
+    // kernel driver on these printers' interfaces, but libusb's darwin backend
+    // counts ANY IORegistry child (e.g. a user client from Logitech G HUB or a
+    // browser's WebUSB) as one. Running as root (setuid), it then "captures"
+    // the device: re-enumerates it on claim AND again on release, right after
+    // the job was sent. A P1102 busy printing can't answer that second
+    // enumeration ("failed to address device, disabling port"), so the port
+    // goes dead until the printer is replugged. Plain claim works fine.
 
     // Find interface + bulk OUT endpoint.
     libusb_device *dev = libusb_get_device(h);
@@ -285,7 +291,6 @@ int main(int argc, char **argv) {
         libusb_release_interface(h, iface);
         h = reset_printer(ctx, h, vid, pid);
         if (!h) { fprintf(stderr, "printer gone after reset\n"); return 1; }
-        libusb_set_auto_detach_kernel_driver(h, 1);
         if ((r = libusb_claim_interface(h, iface))) {
             fprintf(stderr, "claim_interface after reset: %s\n", libusb_error_name(r));
             return 1;
