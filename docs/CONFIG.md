@@ -42,7 +42,7 @@ EOF
 | `DENSITY`        | `1`–`5`, or unset   | unset   | Print density. When unset, no override is added and the driver default is used. See [Print quality / density](#print-quality--density). |
 | `ECONOMODE`      | `on` \| `off`, or unset | unset | Toner-save / draft mode. `off`/unset adds no flag. See [Print quality / density](#print-quality--density). |
 | `DEFAULT_COPIES` | integer ≥ 1         | `1`     | Default number of copies per job when a job does not specify its own. |
-| `DEFAULT_DUPLEX` | `none` \| `long` \| `short` | `none`  | Default duplex mode per job. See "Duplex, N-up, copies" below — most supported models are simplex-only. |
+| `DEFAULT_DUPLEX` | `none` \| `long` \| `short` \| `manual` | `none`  | Default duplex mode per job. `manual` = two-sided by hand (see [Two-sided printing by hand](#two-sided-printing-by-hand-duplexmanual)). `long`/`short` need a hardware duplexer, which most supported models lack. |
 | `DEFAULT_NUP`    | integer ≥ 1         | `1`     | Default pages-per-sheet. Only `1` is honoured; the converters have no N-up (see below). |
 | `NOTIFY`         | `all` \| `errors` \| `none` | `all` | macOS notifications on job completion (see below). |
 | `PRINTER`        | USB PID or name substring, or unset | unset | Which printer to use when **several** supported printers are attached. See "Selecting a printer" below. Ignored when only one supported printer is present. |
@@ -141,7 +141,8 @@ that take precedence over the user config file for that one job. Recognised keys
 |-------------|-----------------|-----------------------------------------------------|
 | `PRINTER`   | `PRINTER=0x3d17`| Route this one job to a specific printer when several are attached (PID or product-name substring). |
 | `COPIES`    | `COPIES=2`      | Number of copies for this job.                      |
-| `DUPLEX`    | `DUPLEX=long`   | Two-sided printing (`none`\|`long`\|`short`).       |
+| `DUPLEX`    | `DUPLEX=manual` | Two-sided printing: `manual` (by hand, any printer), or `long`\|`short` (hardware duplexer only), or `none`. |
+| `PAGES`     | `PAGES=3-7,10`  | Print only these pages (comma-separated pages and ascending ranges). Works one-sided and two-sided. |
 | `NUP`       | `NUP=2`         | Pages per sheet (N-up).                             |
 | `DENSITY`   | `DENSITY=3`     | Print-density override (`1`–`5`) for this job.      |
 | `ECONOMODE` | `ECONOMODE=on`  | Toner-save / draft mode for this job.               |
@@ -290,9 +291,46 @@ Both converters accept `-d`, but **the supported models are overwhelmingly
 simplex-only** (no hardware duplexer). The watcher passes the code through and
 prints — but on a printer with no duplex unit the job simply comes out
 one-sided. When a duplex mode is requested the watcher logs a NOTE to that
-effect. Manual-duplex modes (codes 4/5), which reorder pages for the user to
-re-feed, are intentionally **not** wired up: they need interactive paper
-reinsertion that does not fit the unattended watcher.
+effect. For two-sided output on these printers use `DUPLEX=manual` below
+(the converters' own manual-duplex codes 4/5 are not used: they rely on a
+printer-panel resume and rotate the backs, which doesn't match HP's reload
+instructions).
+
+### Two-sided printing by hand (`DUPLEX=manual`)
+
+For one-sided printers. The watcher prints the **front sides**, shows a dialog
+asking you to put the stack back in, then prints the **back sides in reverse
+order**:
+
+1. Fronts print: positions 1, 3, 5, … of the job.
+2. Dialog: take the whole stack from the output tray **without reordering it**
+   and put it in the input tray **printed side down, top of the pages going in
+   first** (HP's P1100-series instructions). Click **Print back sides**.
+3. Backs print in reverse: …, 6, 4, 2. The printer loads face-up and delivers
+   face-down, so the last front ends up on top and is fed first.
+
+Rules that keep every back on the right sheet:
+
+- **Odd page count**: the last sheet has no back. It's on top of the reloaded
+  stack, so the backs start with a **blank**: 5 pages → fronts 1 3 5, backs
+  blank 4 2.
+- **Page subsets** (`PAGES=`, a Print-dialog range, or Folio's page picker):
+  the split uses the order of the pages being printed. `PAGES=3-7` → fronts
+  3 5 7, backs blank 6 4.
+- **Copies**: each copy starts on a fresh sheet (an odd-length copy gets a
+  blank back), and all fronts print before the single flip.
+- **One page**: nothing to put on a back, so it prints one-sided.
+
+If the dialog is answered **Cancel back sides**, the job ends after the fronts.
+If it goes unanswered for an hour, or the backs fail to print, the job is saved
+as "back sides only" and you're asked again later (see failed jobs). Reprinting
+it sends only the backs.
+
+If your backs come out upside down, reload the stack rotated 180° instead.
+
+Ways to request it: the **"Print on HP LaserJet (two-sided)"** entry in the
+Print dialog's PDF menu, Folio PDF's **Sides: Both sides** switch, a per-job
+`DUPLEX=manual` sidecar, or `DEFAULT_DUPLEX=manual` in the config.
 
 ### N-up
 

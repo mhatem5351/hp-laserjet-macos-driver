@@ -21,7 +21,15 @@
         <string>__HOME__</string>
     </dict>
 
-    <!-- Only run when the spool actually changes; avoids the busy respawn loop. -->
+    <!-- Also wake every 30 s so a printer that is plugged in / powered on is
+         noticed without printing again: deferred jobs print, and saved failed
+         jobs are offered for reprint. Runs with nothing new to do exit at once
+         without touching the spool, so neither this timer nor the watcher's own
+         log writes cause a respawn loop. -->
+    <key>StartInterval</key>
+    <integer>30</integer>
+
+    <!-- Minimum gap between runs. -->
     <key>ThrottleInterval</key>
     <integer>5</integer>
 

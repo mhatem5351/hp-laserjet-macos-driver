@@ -185,6 +185,9 @@ if [ -d "$SPOOL" ]; then
     shopt -s nullglob
     queued=( "$SPOOL"/job-*.pdf )
     info "queued jobs: ${#queued[@]}"
+    failed=( "$SPOOL"/failed/job-*.pdf )
+    [ "${#failed[@]}" -gt 0 ] && \
+        warn "failed jobs saved for reprint: ${#failed[@]} ($SPOOL/failed) — you'll be asked once the printer reconnects"
     if [ -f "$LOG" ]; then info "watcher log: $LOG ($(wc -c < "$LOG" | tr -d ' ') bytes)"
     else info "watcher log: none yet ($LOG)"; fi
 else

@@ -136,6 +136,16 @@ The PDF Service runs inside the macOS print sandbox, so all it does is copy the 
 folder. The unsandboxed launchd watcher does the actual printing. The first page after the printer
 powers on can take about 20 seconds while firmware loads, on models that need it.
 
+### Two-sided printing on a one-sided printer
+
+**⌘P → PDF ▾ → Print on HP LaserJet (two-sided)**, or **Sides: Both sides** in Folio PDF.
+
+The front sides print first. A dialog then asks you to take the stack from the output tray, keep its
+order, and put it back in the input tray **printed side down, top of the pages first**. The back sides
+then print **in reverse order**, so each lands behind its own front. Odd page counts get a blank back for
+the last sheet, and page ranges work too (pages 3–7 → fronts 3 5 7, backs blank 6 4). Details:
+[docs/CONFIG.md](docs/CONFIG.md#two-sided-printing-by-hand-duplexmanual).
+
 ### By dropping a PDF into the spool folder
 
 Anything that can write a file can print. Copy the file under a temporary name first, then rename it
@@ -169,8 +179,9 @@ installed without setuid). A standard <code>./install.sh</code> doesn't have eit
 
 [**Folio PDF**](https://github.com/mhatem5351/folio-pdf-mac) is a free, open-source PDF editor for macOS
 by the author of this fork. It has a built-in **Print to HP LaserJet** sheet that sends jobs straight into
-this driver's spool folder. It writes a `job-<ts>.opts` sidecar with **copies, paper size, density and
-EconoMode**, so you can set per-job options that the sandboxed macOS Print dialog can't pass along.
+this driver's spool folder. It writes a `job-<ts>.opts` sidecar with **copies, paper size, density,
+EconoMode and sides (one or both)**, so you can set per-job options that the sandboxed macOS Print dialog
+can't pass along. Its page-range picker works together with two-sided printing.
 
 <p align="center">
   <img src="docs/images/folio-print-sheet.png" alt="Folio PDF's Print to HP LaserJet sheet with copies, paper, density and EconoMode options" width="80%">
@@ -289,7 +300,17 @@ bytes reached the printer, so you never get garbage or duplicate pages. If the j
 
 - Unplug and re-plug the USB cable, or try a different port or hub. Unpowered hubs sometimes can't
   wake the printer.
-- Power-cycle the printer, then re-queue the job (drop the PDF into the spool folder again).
+- Power-cycle the printer. The failed job is not lost: it waits in `~/HP-LaserJet-spool/failed/`, and
+  once the printer is back (replugged or switched on) a dialog asks whether to **Print** it again,
+  keep it for **Later**, or **Discard** it.
+
+### Every job fails with `0xe00002ed (transaction error)`
+
+If `fwload` accepts a 48-byte status query (`fwload --status 0x03f0 <pid>`) but every real job fails
+on its first write, check the kernel log:
+`/usr/bin/log show --last 10m --predicate 'senderImagePath CONTAINS[c] "USB"' | grep transaction`.
+`status 0xe00002ed (transaction error)` on the printer's endpoints is a USB link fault below the
+driver. Power-cycle the printer, and plug it straight into the Mac rather than through a hub or dock.
 
 ### Other quick checks
 

@@ -11,6 +11,7 @@ rm -f "$AGENT"
 
 echo "==> Removing PDF Service…"
 rm -rf "$HOME_DIR/Library/PDF Services/Print on HP LaserJet.workflow"
+rm -rf "$HOME_DIR/Library/PDF Services/Print on HP LaserJet (two-sided).workflow"
 
 echo "==> Removing installed binaries (sudo)…"
 sudo rm -rf "$PREFIX"

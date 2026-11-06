@@ -31,8 +31,48 @@ fixes are offered upstream.
   when no byte of the job had been sent**, so a partially delivered job is never
   resent (no garbage or duplicate pages). The `--fwver` query gets the same
   single reset-and-retry.
+- **The printer no longer drops off USB after a job.** `fwload` asked libusb
+  to auto-detach kernel drivers. On macOS, libusb treats any IORegistry child
+  of the interface (e.g. a user client from Logitech G HUB or a browser) as a
+  driver, and with `fwload` setuid root it "captured" the device by
+  re-enumerating it on claim and again on release, just after the page was
+  sent. The busy printer failed that re-enumeration ("failed to address
+  device, disabling port"), so the next job found no printer until it was
+  replugged. `fwload` no longer requests auto-detach; there's no kernel
+  driver to detach on these printers.
+- **The watcher no longer wakes itself every 5 seconds.** launchd's `WatchPaths`
+  fires on any change in the spool dir, including the watcher's own
+  `watcher.log` appends, so each run triggered the next one (and re-posted the
+  "Printer not detected" banner) for as long as launchd kept it going. A run
+  with nothing new to do (empty spool, jobs already reported as deferred, or
+  saved failed jobs on the same printer connection) now exits before writing
+  anything.
+- **A failed job is no longer deleted.** When the USB push fails, the job (and
+  its `.opts` sidecar) moves to `~/HP-LaserJet-spool/failed/` instead of being
+  removed with the raster.
 
 ### Added
+- **Two-sided printing on one-sided printers (`DUPLEX=manual`).** The watcher
+  prints the front sides, shows a dialog asking you to put the stack back in
+  (printed side down, top edge first, order unchanged), then prints the back
+  sides in reverse order. Odd page counts get a blank back on the last sheet,
+  which feeds first. Each copy starts on a fresh sheet, and a 1-page job prints
+  one-sided. An unanswered prompt or a failed back pass saves the job as "back
+  sides only" for the reprint prompt. New Print-dialog entry: **Print on HP
+  LaserJet (two-sided)**.
+- **`PAGES=` per-job key** (e.g. `PAGES=3-7,10`) to print a page subset,
+  one-sided or two-sided. In two-sided mode the split follows the pages being
+  printed (pages 3–7 → fronts 3 5 7, backs blank 6 4).
+- **Reprint prompt for failed jobs.** Once the printer is usable again (it
+  re-enumerated on USB after being replugged or power-cycled, or a new job just
+  printed), the watcher shows a dialog per saved job with its time, title, page
+  count and copies: **Print** queues it again, **Discard** deletes it, **Later**
+  (or no answer within 2 minutes) keeps it until the next reconnect or new job.
+  Nothing is ever reprinted without asking.
+- **`StartInterval 30` on the launchd agent**, so a printer that is plugged in
+  or switched on is noticed without printing again: deferred jobs print, and
+  saved failed jobs are offered. Idle runs exit at once without touching disk.
+- `hp-laserjet-doctor` reports how many failed jobs are waiting.
 - **`fwload --fwver VID PID`** prints the `FWVER` field of the printer's
   IEEE-1284 device ID (USB printer-class `GET_DEVICE_ID`), e.g. `20120814` when
   firmware is loaded or `PENDING` when it still needs one; prints nothing if the

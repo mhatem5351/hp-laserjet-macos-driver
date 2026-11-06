@@ -39,13 +39,19 @@ die()  { printf '\033[1;31m error:\033[0m %s\n' "$*" >&2; exit 1; }
 # Uses ioreg, not `system_profiler SPUSBDataType`: the latter returns nothing on
 # macOS Tahoe (26.x). ioreg gives idProduct in decimal, so reformat to 0xXXXX.
 detect_model() {
+    # Collect each USB node's properties before matching: within a node,
+    # idProduct can be listed before "USB Product Name", so matching on the
+    # idProduct line would print the previous device's name. HP vendor only.
     ioreg -p IOUSB -w0 -l 2>/dev/null | awk '
-        /"USB Product Name"/ { name=$0; sub(/.*= *"/,"",name); sub(/".*/,"",name) }
-        /"idProduct" =/ {
-            pid=sprintf("0x%04x", $NF)
-            if (pid ~ /0x0517|0x1317|0x4117|0x2b17|0x002a|0x092a|0x3d17|0x3e17|0x4817|0x4917|0x3f17|0x4017|0x3b17/) {
-                print pid" "name; exit }
-        }'
+        function flush() {
+            if (vid == 1008 && pid ~ /^0x(0517|1317|4117|2b17|002a|092a|3d17|3e17|4817|4917|3f17|4017|3b17)$/) {
+                print pid" "name; found=1; exit }
+        }
+        /\+-o /               { flush(); vid=""; pid=""; name="" }
+        /"idVendor" =/        { vid=$NF }
+        /"idProduct" =/       { pid=sprintf("0x%04x", $NF) }
+        /"USB Product Name"/  { name=$0; sub(/.*= *"/,"",name); sub(/".*/,"",name) }
+        END                   { if (!found) flush() }'
 }
 
 printf '\033[1;36m'
@@ -203,6 +209,18 @@ rm -rf "$PDFSVC"
 mkdir -p "$PDFSVC/Contents"
 cp "$HERE/PDFService/document.wflow" "$PDFSVC/Contents/document.wflow"
 cp "$HERE/PDFService/Info.plist"     "$PDFSVC/Contents/Info.plist"
+
+# Second PDF-menu entry for two-sided printing on these one-sided printers:
+# the same workflow with TWO_SIDED=1 (job gets DUPLEX=manual).
+PDFSVC2="$HOME_DIR/Library/PDF Services/Print on HP LaserJet (two-sided).workflow"
+rm -rf "$PDFSVC2"
+mkdir -p "$PDFSVC2/Contents"
+sed 's/^TWO_SIDED=0$/TWO_SIDED=1/' "$HERE/PDFService/document.wflow" > "$PDFSVC2/Contents/document.wflow"
+sed -e 's#<string>Print on HP LaserJet</string>#<string>Print on HP LaserJet (two-sided)</string>#' \
+    -e 's#com.hp-laserjet.printplugin#com.hp-laserjet.printplugin.twosided#' \
+    "$HERE/PDFService/Info.plist" > "$PDFSVC2/Contents/Info.plist"
+grep -q '^TWO_SIDED=1$' "$PDFSVC2/Contents/document.wflow" \
+    || warn "two-sided PDF Service: TWO_SIDED switch not found in document.wflow"
 
 # --- done -------------------------------------------------------------------
 printf '\033[1;32m\n==> Installed for user %s.\033[0m\n' "'$USER_NAME'"

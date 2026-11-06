@@ -102,6 +102,26 @@ keep anything touching USB or execing binaries out of the PDF Service.
   the watcher leaves jobs queued and exits 0 rather than guessing a model — driving a
   job with the wrong protocol/firmware would misprint. Preserve this; don't add a
   default-model guess.
+- **Silent idle runs (no self-wakeup loop).** launchd fires on *any* spool-dir
+  change, including the watcher's own `watcher.log` appends, and every
+  `StartInterval` (30s). The early gate before the "watcher woke" line must
+  exit without writing anything when there's nothing new: empty spool, the same
+  jobs already deferred (`.deferred`), or failed jobs on an unchanged printer
+  connection. Any new write on an idle path brings back the 5-second loop.
+- **Failed jobs are kept, never auto-reprinted.** A failed USB push moves the
+  job and its `.opts` to `failed/`. They are offered in an osascript dialog
+  (Print / Later / Discard) only when the printer is usable again: a new job
+  printed fine, or the printer's IOKit `sessionID` changed (replug or power
+  cycle), recorded in `failed/.session` / `.printer-gone`. Folio PDF relies on
+  this and no longer resends on its own.
+- **Two-sided by hand (`DUPLEX=manual`, `print_manual_duplex`).** Renders one
+  PBM per page and cuts the sequence (pages × copies, each odd-length copy padded
+  with a blank) into fronts (positions 1,3,5…) and backs **reversed**
+  (…6,4,2). The reload is printed side down, top edge first, and the last front
+  feeds first. Odd counts therefore start the backs with a blank. Order is by
+  position in the printed subset (`PAGES=`), not the original page number. A
+  `DUPLEX_PART=backs` sidecar line marks a saved job whose fronts already
+  printed. Folio PDF parses the first `fwload exit` line (the fronts).
 - Paper size auto-detected via `pdfinfo` page height (A4 842pt vs Letter 792pt);
   anything else falls back to Letter.
 
@@ -119,6 +139,11 @@ A printer that has dozed off can reject the first request with
 `LIBUSB_ERROR_IO`/`PIPE`/`TIMEOUT`. `fwload` then does one `libusb_reset_device`
 (re-opening the device if it re-enumerates) and retries — but **only if zero bytes
 were sent**; resending a partially delivered job could print garbage or duplicates.
+**Never call `libusb_set_auto_detach_kernel_driver`.** libusb's darwin backend
+treats any IORegistry child of the interface as a kernel driver (G HUB / browser
+WebUSB user clients count). Running setuid root, it "captures" the device:
+re-enumerating on claim and again on release, right after the job is sent. A
+busy P1102 fails that re-enumeration and macOS disables the port until replug.
 Around opening the blob file it drops to the real uid (`seteuid(getuid())`) and
 restores root only for USB access, so the setuid binary can't read files the caller
 couldn't.

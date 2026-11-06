@@ -57,6 +57,10 @@
 #   * per-print defaults      -> ~/.config/hp-laserjet/job.opts (KEY=value); if it
 #                                exists it is copied to this job's job-&lt;ts&gt;.opts
 #   * one specific job        -> drop your own job-&lt;ts&gt;.opts in the spool dir
+#
+# TWO_SIDED=1 is set by install.sh in the "(two-sided)" copy of this workflow:
+# the job gets DUPLEX=manual (fronts, a flip prompt, then the backs reversed).
+TWO_SIDED=0
 SPOOL="$HOME/HP-LaserJet-spool"
 mkdir -p "$SPOOL"
 DBG="$SPOOL/stub.log"
@@ -69,6 +73,8 @@ while IFS= read -r PDF; do
     if cp "$PDF" "$SPOOL/.incoming-$ts.pdf" 2&gt;&gt;"$DBG"; then
         # Attach the user's default per-job options sidecar, if they made one.
         [ -f "$DEFAULT_OPTS" ] &amp;&amp; cp "$DEFAULT_OPTS" "$SPOOL/job-$ts.opts" 2&gt;&gt;"$DBG"
+        # Two-sided entry: appended last so it wins over any DUPLEX= above.
+        [ "$TWO_SIDED" = 1 ] &amp;&amp; printf '\nDUPLEX=manual\n' &gt;&gt; "$SPOOL/job-$ts.opts"
         mv "$SPOOL/.incoming-$ts.pdf" "$SPOOL/job-$ts.pdf"
         echo "  spooled job-$ts.pdf" &gt;&gt; "$DBG"
     else

@@ -40,7 +40,8 @@ VID=0x03f0   # HP — same vendor for the whole family
 #   DENSITY=<1-5>            print density (foo2* -T); unset = driver default
 #   ECONOMODE=on|off         toner-save/draft (foo2* -t); unset/off = no flag
 #   DEFAULT_COPIES=<n>       default copy count for a job (default 1)
-#   DEFAULT_DUPLEX=none|long|short   default duplex mode (default none)
+#   DEFAULT_DUPLEX=none|long|short|manual   default duplex mode (default none);
+#                            manual = two-sided by hand: fronts, flip prompt, backs
 #   DEFAULT_NUP=<n>          default pages per sheet (only 1 is honoured)
 #   NOTIFY=all|errors|none   macOS notifications (default all)
 #   PRINTER=<pid|name>       when several supported printers are attached, which
@@ -59,7 +60,7 @@ MARGIN=""
 DENSITY=""
 ECONOMODE=""
 DEFAULT_COPIES=1
-DEFAULT_DUPLEX=none          # none | long | short
+DEFAULT_DUPLEX=none          # none | long | short | manual
 DEFAULT_NUP=1                # pages per sheet (converters only support 1)
 NOTIFY=all
 PRINTER=""
@@ -75,7 +76,7 @@ load_config() {
         *) PAPER=auto ;;
     esac
     [ -n "$DEFAULT_COPIES" ] || DEFAULT_COPIES=1
-    case "$DEFAULT_DUPLEX" in none|long|short) ;; *) DEFAULT_DUPLEX=none ;; esac
+    case "$DEFAULT_DUPLEX" in none|long|short|manual) ;; *) DEFAULT_DUPLEX=none ;; esac
     [ -n "$DEFAULT_NUP" ] || DEFAULT_NUP=1
     case "$NOTIFY" in all|errors|none) ;; *) NOTIFY=all ;; esac
 }
@@ -172,6 +173,66 @@ find_bin() {
 }
 GS=$(find_bin gs)
 PDFINFO=$(find_bin pdfinfo)
+
+# ---------------------------------------------------------------------------
+# Failed jobs + quiet wake-ups.
+#
+# A job whose USB push fails is NOT deleted: it moves to $FAILED_DIR, and once
+# the printer is usable again the user is asked (dialog: Print / Later /
+# Discard) before it is printed a second time. "Usable again" means a new job
+# just printed fine, or the printer re-enumerated on USB since the failure
+# (replugged / power-cycled), detected by its IOKit sessionID changing.
+#
+# launchd fires this script on ANY change in the spool dir, including our own
+# watcher.log appends, and also every StartInterval seconds (so a reconnect is
+# noticed without printing again). Every run that has nothing new to do must
+# therefore exit WITHOUT writing to the log, or each run re-triggers the next
+# one (the 5-second self-wakeup loop).
+# ---------------------------------------------------------------------------
+FAILED_DIR="$SPOOL/failed"
+SESSION_MARK="$FAILED_DIR/.session"      # printer sessions when we last failed/asked
+GONE_MARK="$FAILED_DIR/.printer-gone"    # printer seen absent since then
+DEFER_MARK="$SPOOL/.deferred"            # jobs already reported as deferred
+
+# printer_sessions: IOKit sessionIDs of every attached supported printer, on
+# one line ("" when none). A sessionID changes each time the device enumerates,
+# so a different value means the printer was replugged or power-cycled.
+printer_sessions() {
+    ioreg -p IOUSB -w0 -l 2>/dev/null | awk '
+        function flush() { if (v == 1008 && p != "" && s != "") printf "0x%04x %s %s\n", p, s, tolower(n) }
+        /\+-o /                 { flush(); v=""; p=""; s=""; n="" }
+        /"idVendor" =/          { v = $NF }
+        /"idProduct" =/         { p = $NF }
+        /"sessionID" =/         { s = $NF }
+        /"USB Product Name" =/  { n = $0; sub(/^[^=]*= /, "", n); gsub(/"/, "", n) }
+        END                     { flush() }
+    ' | while read -r pid sess name; do
+        if [ -n "$(model_row "$pid")" ] || [ -n "$(name_row "$name")" ]; then
+            printf '%s ' "$sess"
+        fi
+    done
+}
+
+shopt -s nullglob
+QUEUED=( "$SPOOL"/job-*.pdf )
+FAILED=( "$FAILED_DIR"/job-*.pdf )
+OFFER_ONLY=0
+if [ "${#QUEUED[@]}" -eq 0 ]; then
+    [ "${#FAILED[@]}" -eq 0 ] && exit 0        # nothing at all to do
+    # Only failed jobs are waiting: offer them once the printer has come back.
+    SESS=$(printer_sessions)
+    if [ -z "$SESS" ]; then
+        [ -e "$GONE_MARK" ] || : > "$GONE_MARK"
+        exit 0
+    fi
+    if [ ! -e "$GONE_MARK" ] && [ "$SESS" = "$(cat "$SESSION_MARK" 2>/dev/null)" ]; then
+        exit 0                                 # same connection that failed
+    fi
+    OFFER_ONLY=1
+elif [ -z "$(printer_sessions)" ] && \
+     [ "$(printf '%s\n' "${QUEUED[@]##*/}")" = "$(cat "$DEFER_MARK" 2>/dev/null)" ]; then
+    exit 0                                     # already reported these as deferred
+fi
 
 # Keep the log from growing forever.
 [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 200000 ] && : > "$LOG"
@@ -318,15 +379,17 @@ else
         # re-enumerating). Do NOT guess a default model: driving whatever job
         # is queued as a P1102 would push the wrong protocol/firmware at the
         # wrong interface on any other model. Leave the jobs in the spool and
-        # bail — launchd re-runs us when the spool changes, and printing again
-        # (or powering the printer on) will re-trigger detection.
+        # bail — launchd re-runs us when the spool changes and every
+        # StartInterval, so powering the printer on picks the jobs up.
         echo "  no supported printer detected — deferring queued jobs" >> "$LOG"
-        # Notify once, but only if a job is actually waiting — otherwise a
-        # launchd re-fire on an empty spool would spam the defer banner. This
-        # is a failure-class notification (suppressed when NOTIFY=none).
-        shopt -s nullglob
+        # Notify once per set of waiting jobs: DEFER_MARK lets the early gate
+        # skip (silently) the re-runs our own log write and the timer cause.
+        # Failure-class notification (suppressed when NOTIFY=none).
         set -- "$SPOOL"/job-*.pdf
-        [ "$#" -gt 0 ] && notify error "Printer not detected — job queued"
+        if [ "$#" -gt 0 ]; then
+            printf '%s\n' "${@##*/}" > "$DEFER_MARK"
+            notify error "Printer not detected — job queued"
+        fi
         exit 0
     fi
 fi
@@ -486,6 +549,9 @@ build_conv_flags() {
 # the default flag string stays byte-identical to the pre-feature output.
 job_extra_flags() {
     local flags="" dc
+    # Manual two-sided: the page sequence itself carries the copies and the
+    # front/back split (see print_manual_duplex), so no -n and no -d.
+    [ "${JOB_DUPLEX:-none}" = manual ] && return 0
     # Copies: only foo2zjs encodes -n into the stream; for foo2xqx the job loop
     # re-pushes the raster instead, so don't pass -n to it.
     if [ "$DRIVER" != foo2xqx ] && [ "${COPIES:-1}" -gt 1 ] 2>/dev/null; then
@@ -506,7 +572,7 @@ job_extra_flags() {
 # carrying per-job overrides:
 #
 #   COPIES=2       print N copies                (int; >=1)
-#   DUPLEX=long    two-sided: none|long|short    (simplex units: WARNED)
+#   DUPLEX=long    two-sided: none|long|short|manual (long/short WARNED on simplex units)
 #   NUP=2          N pages per sheet             (converters lack N-up; WARNED)
 #   DENSITY=3      per-job print-density override
 #   PAPER=legal    per-job paper size            (auto|letter|a4|legal|a5|...)
@@ -530,6 +596,8 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     JOB_PAPER="$PAPER"            # config PAPER is the per-job default...
     JOB_SCALE="$SCALE"            # ...and the sidecar may override each below.
     JOB_MARGIN="$MARGIN"
+    JOB_PART=""                   # "backs": fronts already printed (internal)
+    JOB_PAGES=""                  # page subset, e.g. 3-7,10 (default: all)
 
     local sidecar="$1" line key val
     if [ -f "$sidecar" ]; then
@@ -553,6 +621,8 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
                 PAPER)     [ -n "$val" ] && JOB_PAPER="$val" ;;
                 SCALE)     JOB_SCALE="$val" ;;
                 MARGIN)    JOB_MARGIN="$val" ;;
+                DUPLEX_PART) JOB_PART="$val" ;;
+                PAGES)     JOB_PAGES="$val" ;;
                 *) ;;   # unknown keys ignored so features coexist in one sidecar
             esac
         done < "$sidecar"
@@ -561,7 +631,7 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     # Validate / normalise the copies / duplex / N-up values.
     case "$COPIES" in ''|*[!0-9]*) COPIES=1 ;; esac
     [ "$COPIES" -ge 1 ] 2>/dev/null || COPIES=1
-    case "$JOB_DUPLEX" in none|long|short) ;; *) JOB_DUPLEX=none ;; esac
+    case "$JOB_DUPLEX" in none|long|short|manual) ;; *) JOB_DUPLEX=none ;; esac
     case "$JOB_NUP" in ''|*[!0-9]*) JOB_NUP=1 ;; esac
     [ "$JOB_NUP" -ge 1 ] 2>/dev/null || JOB_NUP=1
 
@@ -582,6 +652,14 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
         0) echo "  ignoring SCALE=0 (want positive integer percent)" >> "$LOG"
            JOB_SCALE="" ;;
     esac
+    # PAGES: a page subset such as "3-7,10" (Ghostscript -sPageList syntax:
+    # comma-separated pages and ascending ranges). Anything else = all pages.
+    case "$JOB_PAGES" in
+        ""|all) JOB_PAGES="" ;;
+        *[!0-9,-]*|,*|-*) echo "  ignoring PAGES='$JOB_PAGES' (want e.g. 3-7,10)" >> "$LOG"
+                  JOB_PAGES="" ;;
+        *) echo "  pages: $JOB_PAGES" >> "$LOG" ;;
+    esac
     # MARGIN: non-negative points only; anything else is ignored (no inset).
     case "$JOB_MARGIN" in
         ''|0) JOB_MARGIN="" ;;
@@ -590,7 +668,7 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     esac
 
     # Warn about requests these host-based printers / converters can't fulfil.
-    if [ "$JOB_DUPLEX" != none ]; then
+    if [ "$JOB_DUPLEX" = long ] || [ "$JOB_DUPLEX" = short ]; then
         echo "  NOTE: duplex=$JOB_DUPLEX requested — most host-based LaserJets are" >> "$LOG"
         echo "        simplex-only (no hardware duplexer); passing -d through anyway" >> "$LOG"
     fi
@@ -601,7 +679,282 @@ read_job_opts() {   # $1 = path to the job's .opts sidecar (may not exist)
     return 0
 }
 
-shopt -s nullglob
+# keep_failed: park a job whose push failed in $FAILED_DIR (with its sidecar)
+# instead of deleting it, so the user can choose to reprint it later.
+keep_failed() {   # $1 = job pdf   $2 = its .opts sidecar (may not exist)
+    mkdir -p "$FAILED_DIR"
+    [ -f "$2" ] && mv -f "$2" "$FAILED_DIR/"
+    mv -f "$1" "$FAILED_DIR/"
+    echo "  kept for reprint: failed/${1##*/} (you will be asked before it prints again)" >> "$LOG"
+}
+
+# ask_reprint: modal dialog about one failed job. Echoes Print | Later | Discard.
+# No answer within 2 minutes, or no GUI session, counts as Later. The message
+# is passed as an argv item, never spliced into AppleScript source.
+ask_reprint() {   # $1 = failed job pdf
+    local f="$1" base ts when pages title copies msg ans
+    base=${f##*/}; ts=${base#job-}; ts=${ts%%[!0-9]*}
+    when=$(date -r "$ts" '+%a %d %b at %H:%M' 2>/dev/null) || when="earlier"
+    if [ -n "$PDFINFO" ]; then
+        pages=$("$PDFINFO" "$f" 2>/dev/null | awk -F': *' '/^Pages:/{print $2; exit}')
+        title=$("$PDFINFO" "$f" 2>/dev/null | sed -n 's/^Title: *//p' | head -n1)
+    fi
+    copies=$(sed -n 's/^COPIES=\([0-9][0-9]*\)$/\1/p' "${f%.pdf}.opts" 2>/dev/null | head -n1)
+    [ "${copies:-1}" -gt 1 ] 2>/dev/null || copies=""
+    if grep -q '^DUPLEX_PART=backs' "${f%.pdf}.opts" 2>/dev/null; then
+        msg="The back sides of a two-sided job sent $when have not printed yet. Keep its printed front sides ready."
+    else
+        msg="A print job sent $when did not reach the printer."
+    fi
+    [ -n "$title" ] && msg="$msg
+
+Document: $title"
+    [ -n "$pages" ] && msg="$msg
+Pages: $pages${copies:+ × $copies copies}"
+    msg="$msg
+
+The printer is ready now. Print it again?"
+    ans=$(osascript - "$msg" 2>/dev/null <<'OSA'
+on run argv
+    set r to display dialog (item 1 of argv) with title "HP LaserJet" buttons {"Discard", "Later", "Print"} default button "Print" with icon caution giving up after 120
+    if gave up of r then return "Later"
+    return button returned of r
+end run
+OSA
+)
+    case "$ans" in
+        Print|Discard) echo "$ans" ;;
+        *)             echo "Later" ;;
+    esac
+}
+
+# offer_failed_jobs: ask about each parked job. "Print" moves it back into the
+# spool (sidecar first) for the next pass of the job loop; "Discard" deletes
+# it; "Later" leaves it parked until the printer reconnects or a new job
+# prints. Returns 0 when at least one job was queued again.
+offer_failed_jobs() {
+    local f o ans restored=1
+    for f in "$FAILED_DIR"/job-*.pdf; do
+        o="${f%.pdf}.opts"
+        ans=$(ask_reprint "$f")
+        echo "  failed job ${f##*/}: $ans" >> "$LOG"
+        case "$ans" in
+            Print)   [ -f "$o" ] && mv -f "$o" "$SPOOL/"
+                     mv -f "$f" "$SPOOL/" && restored=0 ;;
+            Discard) rm -f "$f" "$o" ;;
+        esac
+    done
+    remember_printer_state
+    return "$restored"
+}
+
+# remember_printer_state: stamp the current printer connection, so a parked job
+# is only offered again after a reconnect (or alongside a new job).
+remember_printer_state() {
+    [ -d "$FAILED_DIR" ] || return 0
+    local s="" n=0
+    # fwload's own USB reset re-enumerates the printer; wait for it to settle.
+    while [ "$n" -lt 6 ]; do
+        s=$(printer_sessions)
+        [ -n "$s" ] && break
+        sleep 1; n=$((n + 1))
+    done
+    printf '%s' "$s" > "$SESSION_MARK"
+    rm -f "$GONE_MARK"
+}
+
+# render_pages: rasterise the current job ($PDF) to PBM at the model's grid.
+# $1 is Ghostscript's -sOutputFile target: "-" streams every page to stdout
+# (one-sided path, piped into the converter); a "%05d" pattern writes one file
+# per page (two-sided path). PAGES= selects a subset via -sPageList.
+render_pages() {   # $1 = gs OutputFile target
+    local pl=()
+    [ -n "$JOB_PAGES" ] && pl=("-sPageList=$JOB_PAGES")
+    if [ -n "$GS_XFORM" ]; then
+        "$GS" -q -dBATCH -dSAFER -dQUIET -dNOPAUSE \
+              -sDEVICE=pbmraw -r"$RES" -g"$GDIM" \
+              -dFIXEDMEDIA -dPDFFitPage ${pl[@]+"${pl[@]}"} \
+              -sOutputFile="$1" -c "$GS_XFORM" -f "$PDF" 2>>"$LOG"
+    else
+        "$GS" -q -dBATCH -dSAFER -dQUIET -dNOPAUSE \
+              -sDEVICE=pbmraw -r"$RES" -g"$GDIM" \
+              -dFIXEDMEDIA -dPDFFitPage ${pl[@]+"${pl[@]}"} \
+              -sOutputFile="$1" "$PDF" 2>>"$LOG"
+    fi
+}
+
+# push_raster: send one converted raster; logs "fwload exit N (label)", the
+# line Folio PDF and the menu bar parse for the outcome.
+push_raster() {   # $1 = raster file   $2 = label for the log
+    "$FWLOAD" "$1" "$VID" "$PID" >>"$LOG" 2>&1
+    local rc=$?
+    echo "  fwload exit $rc ($2)" >> "$LOG"
+    return "$rc"
+}
+
+# page_labels: "p00003.pbm blank.pbm ..." -> "3 blank ..." for the log, using
+# the document's real page numbers when PAGES= picked a subset (gs numbers its
+# output files 1..n).
+page_labels() {
+    local f b out="" k=0 part a z map=()
+    if [ -n "$JOB_PAGES" ]; then
+        for part in ${JOB_PAGES//,/ }; do
+            a=${part%-*}; z=${part#*-}
+            [ -n "$a" ] && [ -n "$z" ] || continue
+            while [ "$a" -le "$z" ]; do map+=("$a"); a=$((a + 1)); done
+        done
+    fi
+    for f in "$@"; do
+        k=$((k + 1))
+        [ "$k" -gt 40 ] && { out="$out …"; break; }
+        b=${f##*/}
+        case "$b" in
+            blank.pbm) out="$out blank" ;;
+            *) b=${b#p}; b=${b%.pbm}; b=$((10#$b))
+               [ "${#map[@]}" -ge "$b" ] && b=${map[$((b - 1))]}
+               out="$out $b" ;;
+        esac
+    done
+    echo "${out# }"
+}
+
+# ask_flip: the mid-job prompt between fronts and backs. Echoes Print | Cancel
+# | Later (no answer within an hour, or no GUI session).
+ask_flip() {   # $1 = sheets   $2 = pages per copy
+    local msg ans
+    if [ "$JOB_PART" = backs ]; then
+        msg="Ready to print the back sides of a two-sided job ($1 sheet(s))."
+    else
+        msg="The front sides are printing now ($1 sheet(s))."
+    fi
+    msg="$msg
+
+When the printer has finished:
+1. Take the whole printed stack from the output tray. Keep the sheets in the same order.
+2. Put it in the input tray with the printed side facing DOWN and the top of the pages going into the printer first.
+3. Click \"Print back sides\".
+
+The back sides print in reverse order, so each one lands behind its own front."
+    if [ $(( $2 % 2 )) -eq 1 ]; then
+        msg="$msg
+The document has an odd number of pages, so the sheet with the last page (the first one to go back in) gets a blank back."
+    fi
+    ans=$(osascript - "$msg" 2>/dev/null <<'OSA'
+on run argv
+    set r to display dialog (item 1 of argv) with title "HP LaserJet: two-sided printing" buttons {"Cancel back sides", "Print back sides"} default button "Print back sides" with icon note giving up after 3600
+    if gave up of r then return "Later"
+    return button returned of r
+end run
+OSA
+)
+    case "$ans" in
+        "Print back sides")  echo Print ;;
+        "Cancel back sides") echo Cancel ;;
+        *)                   echo Later ;;
+    esac
+}
+
+# park_backs: fronts are on paper but the backs didn't print (push failed or
+# the flip prompt went unanswered). Save the job marked DUPLEX_PART=backs so
+# a later "Print" in the reprint prompt sends only the back sides.
+park_backs() {
+    keep_failed "$PDF" "$OPTS"
+    printf 'DUPLEX=manual\nDUPLEX_PART=backs\n' >> "$FAILED_DIR/${OPTS##*/}"
+}
+
+# print_manual_duplex: two-sided printing on a one-sided printer.
+#
+# The page sequence (all pages, or the PAGES= subset, times COPIES) is cut into
+# sheets: positions 1,3,5... are fronts, 2,4,6... backs. The printer loads
+# face-up and delivers face-down, so after the fronts the LAST front sits on
+# top of the output stack; reloaded printed-side-down, top edge first (HP's
+# P1100 instructions), that sheet feeds first. Hence the backs go in REVERSE:
+# 6,4,2. An odd page count gets a blank back for its last sheet (it feeds
+# first, so it leads the reversed list: blank,4,2). With copies, each copy
+# starts on a fresh sheet. A 1-page job just prints one-sided.
+print_manual_duplex() {
+    local dir n w h c i total sheets ans
+    local seq=() fronts=() backs=()
+    dir=$(mktemp -d /tmp/hp-laserjet.XXXXXX) || return 0
+    render_pages "$dir/p%05d.pbm"
+    set -- "$dir"/p*.pbm
+    n=$#
+    if [ "$n" -lt 2 ]; then
+        echo "  two-sided: $n page(s), nothing for a back side; printing one-sided" >> "$LOG"
+        rm -rf "$dir"
+        JOB_DUPLEX=none
+        CONV_FLAGS=$(build_conv_flags)
+        return 0
+    fi
+
+    # A blank page with the same geometry as the rendered ones.
+    read -r w h <<EOF
+$(LC_ALL=C head -c 256 "$1" | LC_ALL=C awk 'NR > 1 && !/^#/ { print $1, $2; exit }')
+EOF
+    { printf 'P4\n%s %s\n' "$w" "$h"; head -c $(( (w + 7) / 8 * h )) /dev/zero; } > "$dir/blank.pbm"
+
+    c=1
+    while [ "$c" -le "${COPIES:-1}" ]; do
+        seq+=("$@")
+        [ $(( n % 2 )) -eq 1 ] && seq+=("$dir/blank.pbm")
+        c=$((c + 1))
+    done
+    total=${#seq[@]}
+    sheets=$(( total / 2 ))
+    i=0
+    while [ "$i" -lt "$total" ]; do fronts+=("${seq[$i]}"); i=$((i + 2)); done
+    i=$(( total - 1 ))
+    while [ "$i" -ge 1 ]; do backs+=("${seq[$i]}"); i=$((i - 2)); done
+    echo "  two-sided: $n page(s) x ${COPIES:-1} cop(y/ies) -> $sheets sheet(s)" >> "$LOG"
+    echo "  two-sided fronts: $(page_labels "${fronts[@]}")" >> "$LOG"
+    echo "  two-sided backs (reversed): $(page_labels "${backs[@]}")" >> "$LOG"
+
+    # shellcheck disable=SC2086
+    cat "${fronts[@]}" | "$CONV" $CONV_FLAGS > "$dir/fronts.raster" 2>>"$LOG"
+    # shellcheck disable=SC2086
+    cat "${backs[@]}"  | "$CONV" $CONV_FLAGS > "$dir/backs.raster"  2>>"$LOG"
+    rm -f "$dir"/p*.pbm "$dir/blank.pbm"
+    if [ "$(wc -c < "$dir/fronts.raster")" -lt 32 ] || [ "$(wc -c < "$dir/backs.raster")" -lt 32 ]; then
+        echo "  empty conversion, skipped" >> "$LOG"
+        notify error "Print failed on $(printer_label) (conversion produced no output)"
+        rm -rf "$dir"
+        return 0
+    fi
+
+    if [ "$JOB_PART" = backs ]; then
+        echo "  two-sided: fronts printed earlier; printing the back sides only" >> "$LOG"
+    elif ! push_raster "$dir/fronts.raster" "two-sided fronts, $sheets sheet(s)"; then
+        RUN_FAILED=1
+        keep_failed "$PDF" "$OPTS"
+        notify error "Print failed on $(printer_label) — job saved; reconnect or power-cycle the printer and you'll be asked to reprint it"
+        rm -rf "$dir"
+        return 0
+    fi
+
+    ans=$(ask_flip "$sheets" "$n")
+    echo "  two-sided: flip prompt -> $ans" >> "$LOG"
+    case "$ans" in
+        Print)
+            if push_raster "$dir/backs.raster" "two-sided backs, $sheets sheet(s)"; then
+                notify success "Printed two-sided on $(printer_label)"
+            else
+                RUN_FAILED=1
+                park_backs
+                notify error "Back sides failed on $(printer_label) — saved; reconnect or power-cycle the printer and you'll be asked to print them"
+            fi ;;
+        Later)
+            RUN_FAILED=1     # don't re-offer in this same run
+            park_backs
+            notify error "Back sides not printed — saved; you'll be asked again later" ;;
+        *)
+            echo "  two-sided: back sides cancelled" >> "$LOG" ;;
+    esac
+    rm -rf "$dir"
+}
+
+RUN_FAILED=0     # a push failed during this run: the printer isn't usable now
+PASS=1
+while :; do
 for PDF in "$SPOOL"/job-*.pdf; do
     echo "processing $PDF" >> "$LOG"
     OPTS="${PDF%.pdf}.opts"
@@ -722,19 +1075,18 @@ EOF
         echo "  gs transform: scale=${JOB_SCALE:-100}% margin=${JOB_MARGIN:-0}pt -> factor=$sxf (page ${pw}x${ph}pt)" >> "$LOG"
     fi
 
-    if [ -n "$GS_XFORM" ]; then
-        "$GS" -q -dBATCH -dSAFER -dQUIET -dNOPAUSE \
-              -sDEVICE=pbmraw -r$RES -g$GDIM \
-              -dFIXEDMEDIA -dPDFFitPage \
-              -sOutputFile=- -c "$GS_XFORM" -f "$PDF" 2>>"$LOG" \
-          | "$CONV" $CONV_FLAGS > "$TMP" 2>>"$LOG"
-    else
-    "$GS" -q -dBATCH -dSAFER -dQUIET -dNOPAUSE \
-          -sDEVICE=pbmraw -r$RES -g$GDIM \
-          -dFIXEDMEDIA -dPDFFitPage \
-          -sOutputFile=- "$PDF" 2>>"$LOG" \
-      | "$CONV" $CONV_FLAGS > "$TMP" 2>>"$LOG"
+    # Two-sided by hand: fronts, flip prompt, reversed backs. A 1-page job comes
+    # back with JOB_DUPLEX=none and continues as one-sided below.
+    if [ "$JOB_DUPLEX" = manual ]; then
+        print_manual_duplex
+        if [ "$JOB_DUPLEX" = manual ]; then
+            rm -f "$TMP" "$PDF" "$OPTS"     # no-ops if the job was parked
+            continue
+        fi
     fi
+
+    # shellcheck disable=SC2086
+    render_pages - | "$CONV" $CONV_FLAGS > "$TMP" 2>>"$LOG"
 
     sz=$(wc -c < "$TMP")
     echo "  raster $sz bytes" >> "$LOG"
@@ -766,12 +1118,37 @@ EOF
         if [ "$job_rc" -eq 0 ]; then
             notify success "Printed on $(printer_label)"
         else
-            notify error "Print failed on $(printer_label) (push error)"
+            # USB push failed (printer asleep, wedged, unplugged...). Keep the
+            # job; the user is asked before it prints again.
+            RUN_FAILED=1
+            keep_failed "$PDF" "$OPTS"
+            notify error "Print failed on $(printer_label) — job saved; reconnect or power-cycle the printer and you'll be asked to reprint it"
         fi
     else
         echo "  empty conversion, skipped" >> "$LOG"
         # Empty raster means gs or the converter produced nothing usable.
+        # Retrying cannot help, so this job is dropped, not kept.
         notify error "Print failed on $(printer_label) (conversion produced no output)"
     fi
-    rm -f "$TMP" "$PDF" "$OPTS"
+    rm -f "$TMP" "$PDF" "$OPTS"     # no-ops for a job keep_failed already moved
 done
+
+# Second pass: offer parked jobs, but only when the printer is usable — nothing
+# failed in this run and, on a timer/reconnect run with no new job, the printer
+# answers a firmware-status query.
+[ "$PASS" -eq 1 ] || break
+PASS=2
+[ "$RUN_FAILED" -eq 0 ] || break
+set -- "$FAILED_DIR"/job-*.pdf
+[ "$#" -gt 0 ] || break
+if [ "$OFFER_ONLY" -eq 1 ] && ! "$FWLOAD" --fwver "$VID" "$PID" >/dev/null 2>>"$LOG"; then
+    echo "  printer reconnected but not answering; parked jobs wait" >> "$LOG"
+    remember_printer_state      # don't re-probe until the next reconnect
+    break
+fi
+offer_failed_jobs || break
+done
+
+rm -f "$DEFER_MARK"
+[ "$RUN_FAILED" -eq 1 ] && remember_printer_state
+exit 0
